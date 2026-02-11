@@ -1,0 +1,1554 @@
+// ==UserScript==
+// @name         Snake Evolution GWR
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Conversion rate toggle with evolutionary snake animation
+// @author       kr0m4
+// @match        https://galaxywebrevenue2.com/report/offer*
+// @match        https://galaxywebrevenue2.com/*
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ===== STATE MANAGEMENT =====
+    let currentConversions = 0;
+    let previousConversions = parseInt(localStorage.getItem('previousConversions') || '0');
+    // Load saved state from localStorage, default to false (original conversions)
+    let showConversionRate = localStorage.getItem('showConversionRate') === 'true';
+    let originalConversionsData = {}; // Store original conversion values
+    let username = ''; // Will be extracted from page
+
+    // Auto-refresh every 10 seconds
+    let autoRefreshTimer = setTimeout(function() {
+        location.reload();
+    }, 10000);
+
+    // ===== HELPER FUNCTIONS =====
+
+    // Extract user ID from current page
+    function extractUserId() {
+        // Try to get from URL first
+        const urlMatch = window.location.href.match(/user\/(\d+)/);
+        if (urlMatch) {
+            return urlMatch[1];
+        }
+
+        // Try to get from any link on the page
+        const links = document.querySelectorAll('a[href*="/user/"]');
+        for (const link of links) {
+            const linkMatch = link.href.match(/user\/(\d+)/);
+            if (linkMatch) {
+                return linkMatch[1];
+            }
+        }
+
+        return null;
+    }
+
+    // Extract username from page
+    function extractUsername() {
+        // Try to find username in the page - check common locations
+        const usernameElements = [
+            document.querySelector('[class*="user"]'),
+            document.querySelector('[class*="name"]'),
+            document.querySelector('.username'),
+            document.querySelector('#username')
+        ];
+
+        for (const el of usernameElements) {
+            if (el && el.textContent.trim()) {
+                return el.textContent.trim();
+            }
+        }
+
+        // Fallback to a default if not found
+        return 'PLAYER';
+    }
+
+    // Get date range from URL or form
+    function getDateRangeFromPage() {
+        // Try to get from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const dFrom = urlParams.get('d_from');
+        const dTo = urlParams.get('d_to');
+        const dateSelect = urlParams.get('dateSelect');
+
+        if (dFrom && dTo) {
+            return { from: dFrom, to: dTo, dateSelect: dateSelect || '0' };
+        }
+
+        // Try to get from date input fields on the page
+        const fromInput = document.querySelector('input[name="d_from"]');
+        const toInput = document.querySelector('input[name="d_to"]');
+
+        if (fromInput && toInput && fromInput.value && toInput.value) {
+            return {
+                from: fromInput.value,
+                to: toInput.value,
+                dateSelect: '0'
+            };
+        }
+
+        // Default to today
+        const today = new Date().toISOString().split('T')[0];
+        return { from: today, to: today, dateSelect: '0' };
+    }
+
+    // Build conversion details URL
+    function buildConversionUrl(userId, offerId, dateRange) {
+        return `https://galaxywebrevenue2.com/user/${userId}/${offerId}/conversions-by-country?d_from=${dateRange.from}&d_to=${dateRange.to}&dateSelect=${dateRange.dateSelect}`;
+    }
+
+    // Extract offer ID from a table row
+    function extractOfferIdFromRow(row) {
+        // Look for offer ID in the first few cells
+        for (let i = 0; i < Math.min(3, row.cells.length); i++) {
+            const cell = row.cells[i];
+
+            // Check for a link first
+            const link = cell.querySelector('a');
+            if (link && link.href) {
+                // Try to extract from link like /report/offer/1019/
+                const linkMatch = link.href.match(/\/offer\/(\d+)/);
+                if (linkMatch) {
+                    return linkMatch[1];
+                }
+            }
+
+            // Try to parse text content as number
+            const text = cell.textContent.trim();
+            if (/^\d+$/.test(text)) {
+                const num = parseInt(text);
+                // Reasonable offer ID range (adjust if needed)
+                if (num > 900 && num < 10000) {
+                    return text;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // ===== KILL STREAK ANNOUNCEMENTS =====
+    function getKillStreakText(conversions) {
+        const killStreaks = {
+            1: { text: 'First Blood!', color: '#ff0000' },
+            2: { text: 'Double Kill!', color: '#0066ff' },
+            3: { text: 'Triple Kill!!!', color: '#00ff00' },
+            4: { text: 'Ultra Kill!!!', color: '#00ffff' },
+            5: { text: 'Rampage!!!', color: '#9370db' },
+            6: { text: 'Mega Kill!!!!', color: '#ff6600' },
+            7: { text: 'Unstoppable!!!!', color: '#ff00ff' },
+            8: { text: 'Wicked Sick!!!!!', color: '#ffff00' },
+            9: { text: 'Monster Kill!!!!!!', color: '#ff1493' },
+            10: { text: 'GODLIKE!!!!!!!', color: '#ffd700' }
+        };
+
+        if (conversions >= 10) {
+            return { text: 'GODLIKE!!!!!!!', color: '#ffd700' };
+        }
+
+        return killStreaks[conversions] || { text: 'Kill!', color: '#ffffff' };
+    }
+
+    function showKillStreakAnnouncement(conversions, username) {
+        const killStreak = getKillStreakText(conversions);
+        
+        // Create fullscreen overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'killStreakOverlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000000;
+            z-index: 999999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease-in;
+        `;
+
+        overlay.innerHTML = `
+            <style>
+                @keyframes fadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes fadeOut {
+                    from { opacity: 1; }
+                    to { opacity: 0; }
+                }
+                @keyframes slideInFromTop {
+                    from { transform: translateY(-100px); opacity: 0; }
+                    to { transform: translateY(0); opacity: 1; }
+                }
+                @keyframes slideInFromBottom {
+                    from { transform: translateY(100px); opacity: 0; }
+                    to { transform: translateY(0); opacity: 1; }
+                }
+                @keyframes pulseGlow {
+                    0%, 100% { 
+                        text-shadow: 0 0 10px ${killStreak.color}, 
+                                     0 0 20px ${killStreak.color}, 
+                                     0 0 30px ${killStreak.color},
+                                     0 0 40px ${killStreak.color};
+                        transform: scale(1);
+                    }
+                    50% { 
+                        text-shadow: 0 0 20px ${killStreak.color}, 
+                                     0 0 30px ${killStreak.color}, 
+                                     0 0 40px ${killStreak.color},
+                                     0 0 60px ${killStreak.color},
+                                     0 0 80px ${killStreak.color};
+                        transform: scale(1.1);
+                    }
+                }
+                @keyframes shake {
+                    0%, 100% { transform: translateX(0) rotate(0deg); }
+                    10% { transform: translateX(-10px) rotate(-2deg); }
+                    20% { transform: translateX(10px) rotate(2deg); }
+                    30% { transform: translateX(-10px) rotate(-2deg); }
+                    40% { transform: translateX(10px) rotate(2deg); }
+                    50% { transform: translateX(-10px) rotate(-2deg); }
+                    60% { transform: translateX(10px) rotate(2deg); }
+                    70% { transform: translateX(-10px) rotate(-2deg); }
+                    80% { transform: translateX(10px) rotate(2deg); }
+                    90% { transform: translateX(-10px) rotate(-2deg); }
+                }
+            </style>
+            <div style="
+                color: #ffffff;
+                font-size: 48px;
+                font-weight: bold;
+                font-family: 'Arial Black', sans-serif;
+                margin-bottom: 40px;
+                animation: slideInFromTop 0.6s ease-out;
+            ">${username}</div>
+            <div style="
+                color: #cccccc;
+                font-size: 36px;
+                font-weight: normal;
+                font-family: Arial, sans-serif;
+                margin-bottom: 20px;
+                animation: slideInFromTop 0.8s ease-out;
+            ">just drew</div>
+            <div style="
+                color: ${killStreak.color};
+                font-size: 72px;
+                font-weight: bold;
+                font-family: 'Arial Black', sans-serif;
+                animation: slideInFromBottom 0.6s ease-out, pulseGlow 1.5s ease-in-out infinite, shake 0.5s ease-in-out;
+                text-transform: uppercase;
+                letter-spacing: 4px;
+            ">${killStreak.text}</div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Remove overlay after 3 seconds
+        setTimeout(() => {
+            overlay.style.animation = 'fadeOut 0.5s ease-out';
+            setTimeout(() => {
+                if (overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            }, 500);
+        }, 3000);
+    }
+
+    // ===== MAIN INITIALIZATION =====
+    window.addEventListener('load', function() {
+        // Extract username
+        username = extractUsername();
+        
+        enhanceReportTable();
+        createToggleButton();
+    });
+
+    // ===== TOGGLE BUTTON CREATION =====
+    function createToggleButton() {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'conversionToggleBtn';
+        // Set initial text based on current state
+        toggleBtn.textContent = showConversionRate ? '💊 Show Conversions' : '💊 Show Conv Rate';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 80px;
+            right: -300px;
+            z-index: 9999;
+            padding: 12px 24px;
+            background-color: #9C27B0;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        `;
+
+        toggleBtn.onmouseover = () => {
+            toggleBtn.style.backgroundColor = '#7B1FA2';
+            toggleBtn.style.transform = 'scale(1.05)';
+        };
+
+        toggleBtn.onmouseout = () => {
+            toggleBtn.style.backgroundColor = '#9C27B0';
+            toggleBtn.style.transform = 'scale(1)';
+        };
+
+        toggleBtn.onclick = toggleConversionDisplay;
+        document.body.appendChild(toggleBtn);
+
+        // Add hover functionality
+        const toggleHoverZone = document.createElement('div');
+        toggleHoverZone.id = 'toggleHoverZone';
+        toggleHoverZone.style.cssText = `
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 200px;
+            height: 100px;
+            z-index: 9998;
+            pointer-events: all;
+        `;
+
+        toggleHoverZone.onmouseenter = () => {
+            toggleBtn.style.right = '20px';
+        };
+
+        toggleHoverZone.onmouseleave = () => {
+            setTimeout(() => {
+                const isOverButton = toggleBtn.matches(':hover');
+                if (!isOverButton) {
+                    toggleBtn.style.right = '-300px';
+                }
+            }, 100);
+        };
+
+        toggleBtn.onmouseleave = () => {
+            setTimeout(() => {
+                const isOverZone = toggleHoverZone.matches(':hover');
+                if (!isOverZone) {
+                    toggleBtn.style.right = '-300px';
+                }
+            }, 100);
+        };
+
+        document.body.appendChild(toggleHoverZone);
+    }
+
+    // ===== TOGGLE FUNCTIONALITY =====
+    function toggleConversionDisplay() {
+        showConversionRate = !showConversionRate;
+        // Save state to localStorage
+        localStorage.setItem('showConversionRate', showConversionRate.toString());
+
+        const toggleBtn = document.getElementById('conversionToggleBtn');
+
+        if (showConversionRate) {
+            toggleBtn.textContent = '💊 Show Conversions';
+        } else {
+            toggleBtn.textContent = '💊 Show Conv Rate';
+        }
+
+        enhanceReportTable();
+    }
+
+    // ===== ENHANCED REPORT TABLE =====
+    function enhanceReportTable() {
+        const table = document.querySelector('table');
+        if (!table) {
+            console.log('Table not found, retrying...');
+            setTimeout(enhanceReportTable, 500);
+            return;
+        }
+
+        const headerRow = table.querySelector('thead tr') || table.rows[0];
+        if (!headerRow) return;
+
+        const headers = Array.from(headerRow.cells);
+        const conversionsIndex = headers.findIndex(cell =>
+            cell.textContent.trim() === 'Conversions' || cell.textContent.trim() === 'Conversion Rate'
+        );
+
+        if (conversionsIndex === -1) {
+            console.log('Conversions column not found');
+            return;
+        }
+
+        const conversionsHeader = headers[conversionsIndex];
+
+        if (showConversionRate) {
+            conversionsHeader.textContent = 'Conversion Rate';
+            conversionsHeader.style.cssText = `
+                text-align: center !important;
+            `;
+        } else {
+            conversionsHeader.textContent = 'Conversions';
+            conversionsHeader.style.cssText = `
+                text-align: center !important;
+            `;
+        }
+
+        const tbody = table.querySelector('tbody') || table;
+        const rows = Array.from(tbody.rows).slice(headerRow.parentElement.tagName === 'THEAD' ? 0 : 1);
+
+        let totalRow = null;
+        let totalUnique = 0;
+        let totalConversions = 0;
+
+        // Get user ID and date range for conversion links
+        const userId = extractUserId();
+        const dateRange = getDateRangeFromPage();
+
+        rows.forEach((row, rowIndex) => {
+            if (row.cells[0]?.textContent.trim() === 'Offer ID') return;
+
+            const isTotalRow = row.cells[0]?.textContent.trim() === 'TOTAL';
+
+            if (isTotalRow) {
+                totalRow = row;
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+
+                if (uniqueCell && conversionsCell) {
+                    totalUnique = parseInt(uniqueCell.textContent.trim()) || 0;
+
+                    // Store original conversion value if not already stored
+                    if (!originalConversionsData[`total`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
+                            originalConversionsData[`total`] = originalText;
+                        }
+                    }
+
+                    if (showConversionRate) {
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+
+                        let conversionRate = 0;
+                        let displayText = '0.00%';
+
+                        if (totalUnique > 0) {
+                            conversionRate = (totalConversions / totalUnique) * 100;
+                            displayText = conversionRate.toFixed(2) + '%';
+                        }
+
+                        conversionsCell.textContent = displayText;
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                    } else {
+                        // Show original conversions as plain text (TOTAL row not clickable)
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+                        conversionsCell.textContent = originalConversionsData[`total`] || totalConversions;
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                        
+                        // Check for kill streak announcement
+                        if (totalConversions > previousConversions && totalConversions > 0) {
+                            console.log('Kill streak detected!', previousConversions, '->', totalConversions);
+                            showKillStreakAnnouncement(totalConversions, username);
+                            localStorage.setItem('previousConversions', totalConversions.toString());
+                            previousConversions = totalConversions;
+                        }
+                    }
+                }
+            } else {
+                // For non-TOTAL rows
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+
+                if (uniqueCell && conversionsCell) {
+                    const unique = parseInt(uniqueCell.textContent.trim()) || 0;
+
+                    // Store original conversion value
+                    if (!originalConversionsData[`row_${rowIndex}`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
+                            originalConversionsData[`row_${rowIndex}`] = originalText;
+                        }
+                    }
+
+                    if (showConversionRate) {
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || conversionsCell.textContent.trim()) || 0;
+
+                        if (unique > 0) {
+                            const rate = (conversions / unique) * 100;
+                            conversionsCell.textContent = rate.toFixed(2) + '%';
+                            conversionsCell.style.backgroundColor = '';
+                        } else {
+                            conversionsCell.textContent = '0.00%';
+                        }
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                    } else {
+                        // Show original conversions - make clickable if possible
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || '0');
+
+                        // Extract offer ID from this row
+                        const offerId = extractOfferIdFromRow(row);
+
+                        // Make clickable if we have all the necessary info and conversions > 0
+                        if (userId && offerId && conversions > 0) {
+                            const conversionUrl = buildConversionUrl(userId, offerId, dateRange);
+                            conversionsCell.innerHTML = `<a href="${conversionUrl}" style="color: #2196F3; text-decoration: none; cursor: pointer;">${conversions}</a>`;
+                        } else {
+                            conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
+                        }
+
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                    }
+                }
+            }
+        });
+
+        // Handle snake animation based on toggle state
+        const existingSnake = document.getElementById('snakeAnimationRow');
+        if (existingSnake) {
+            existingSnake.remove();
+        }
+
+        if (totalRow && showConversionRate) {
+            createEvolutionarySnake(totalRow.parentNode, totalRow, totalConversions);
+        }
+
+        addGlobalStyles();
+    }
+
+    // ===== EVOLUTIONARY SNAKE SYSTEM =====
+    function getBadgeStyle(stage, conversions) {
+        let badgeHTML = '';
+        
+        switch(stage) {
+            case 'basic':
+                // Simple badge - basic style
+                badgeHTML = `
+                    <div style="
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        font-size: 28px;
+                        font-weight: bold;
+                        padding: 8px 20px;
+                        border-radius: 50px;
+                        margin: 0 20px;
+                        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.5);
+                        font-family: 'Arial Black', sans-serif;
+                        min-width: 60px;
+                        text-align: center;
+                    ">${conversions}</div>
+                `;
+                break;
+                
+            case 'evolved':
+                // Pulsing blue badge with glow
+                badgeHTML = `
+                    <div style="
+                        position: relative;
+                        background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
+                        color: white;
+                        font-size: 32px;
+                        font-weight: bold;
+                        padding: 10px 24px;
+                        border-radius: 50px;
+                        margin: 0 20px;
+                        box-shadow: 0 0 20px rgba(30, 136, 229, 0.8), 0 0 40px rgba(30, 136, 229, 0.4);
+                        font-family: 'Arial Black', sans-serif;
+                        min-width: 70px;
+                        text-align: center;
+                        animation: pulseBadge 1.5s ease-in-out infinite;
+                        border: 2px solid #00ffff;
+                    ">${conversions}</div>
+                    <style>
+                        @keyframes pulseBadge {
+                            0%, 100% { transform: scale(1); }
+                            50% { transform: scale(1.05); }
+                        }
+                    </style>
+                `;
+                break;
+                
+            case 'venomous':
+                // Purple badge with dripping effect and particles
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 20px;">
+                        <div style="
+                            background: linear-gradient(135deg, #7b1fa2 0%, #4a148c 100%);
+                            color: #ff00ff;
+                            font-size: 36px;
+                            font-weight: bold;
+                            padding: 12px 28px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 25px rgba(123, 31, 162, 0.9), 0 0 50px rgba(138, 0, 255, 0.5), inset 0 0 20px rgba(255, 0, 255, 0.3);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 80px;
+                            text-align: center;
+                            animation: venomPulse 1s ease-in-out infinite;
+                            border: 3px solid #ff00ff;
+                            text-shadow: 0 0 10px #ff00ff, 0 0 20px #8800ff;
+                        ">${conversions}</div>
+                        <div style="position: absolute; top: -5px; left: 50%; width: 6px; height: 6px; background: #00ff00; border-radius: 50%; animation: drip1 2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: -5px; right: 20%; width: 5px; height: 5px; background: #00ff00; border-radius: 50%; animation: drip2 2.5s ease-in-out infinite;"></div>
+                    </div>
+                    <style>
+                        @keyframes venomPulse {
+                            0%, 100% { transform: scale(1); filter: brightness(1); }
+                            50% { transform: scale(1.08); filter: brightness(1.2); }
+                        }
+                        @keyframes drip1 {
+                            0% { transform: translateY(0); opacity: 1; }
+                            100% { transform: translateY(20px); opacity: 0; }
+                        }
+                        @keyframes drip2 {
+                            0% { transform: translateY(0); opacity: 1; }
+                            100% { transform: translateY(20px); opacity: 0; }
+                        }
+                    </style>
+                `;
+                break;
+                
+            case 'demonic':
+                // Hellfire badge with flames and intense glow
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 20px;">
+                        <div style="
+                            background: linear-gradient(135deg, #b71c1c 0%, #7f0000 50%, #b71c1c 100%);
+                            color: #ff3300;
+                            font-size: 40px;
+                            font-weight: bold;
+                            padding: 14px 32px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 30px rgba(255, 0, 0, 1), 0 0 60px rgba(255, 51, 0, 0.6), inset 0 0 25px rgba(255, 100, 0, 0.4);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 90px;
+                            text-align: center;
+                            animation: hellfirePulse 0.8s ease-in-out infinite;
+                            border: 3px solid #ff0000;
+                            text-shadow: 0 0 15px #ff0000, 0 0 30px #ff6600, 0 0 45px #ff0000;
+                        ">${conversions}</div>
+                        <!-- Flame particles -->
+                        <div style="position: absolute; top: -8px; left: 20%; width: 8px; height: 12px; background: linear-gradient(to top, #ff6600, #ff0000); border-radius: 50% 50% 0 0; animation: flame1 1s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: -8px; right: 20%; width: 8px; height: 12px; background: linear-gradient(to top, #ff6600, #ff0000); border-radius: 50% 50% 0 0; animation: flame2 1.2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: -8px; left: 50%; width: 10px; height: 14px; background: linear-gradient(to top, #ff6600, #ffff00); border-radius: 50% 50% 0 0; animation: flame3 0.9s ease-in-out infinite;"></div>
+                        <!-- Ember particles -->
+                        <div style="position: absolute; bottom: -5px; left: 15%; width: 4px; height: 4px; background: #ff6600; border-radius: 50%; animation: ember1 2s ease-in infinite;"></div>
+                        <div style="position: absolute; bottom: -5px; right: 25%; width: 3px; height: 3px; background: #ff3300; border-radius: 50%; animation: ember2 2.3s ease-in infinite;"></div>
+                    </div>
+                    <style>
+                        @keyframes hellfirePulse {
+                            0%, 100% { transform: scale(1) rotate(0deg); filter: brightness(1) hue-rotate(0deg); }
+                            25% { transform: scale(1.06) rotate(-1deg); }
+                            50% { transform: scale(1.12) rotate(0deg); filter: brightness(1.3) hue-rotate(10deg); }
+                            75% { transform: scale(1.06) rotate(1deg); }
+                        }
+                        @keyframes flame1 {
+                            0%, 100% { transform: translateY(0) scaleY(1); opacity: 1; }
+                            50% { transform: translateY(-15px) scaleY(1.5); opacity: 0; }
+                        }
+                        @keyframes flame2 {
+                            0%, 100% { transform: translateY(0) scaleY(1); opacity: 1; }
+                            50% { transform: translateY(-18px) scaleY(1.6); opacity: 0; }
+                        }
+                        @keyframes flame3 {
+                            0%, 100% { transform: translateY(0) scaleY(1); opacity: 1; }
+                            50% { transform: translateY(-20px) scaleY(1.8); opacity: 0; }
+                        }
+                        @keyframes ember1 {
+                            0% { transform: translateY(0); opacity: 1; }
+                            100% { transform: translateY(-30px); opacity: 0; }
+                        }
+                        @keyframes ember2 {
+                            0% { transform: translateY(0); opacity: 1; }
+                            100% { transform: translateY(-35px); opacity: 0; }
+                        }
+                    </style>
+                `;
+                break;
+                
+            case 'divine':
+                // Divine golden badge with holy aura and sparkles
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 25px;">
+                        <!-- Holy aura rings -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 140px; height: 140px; border-radius: 50%; border: 3px solid rgba(255, 215, 0, 0.4); animation: holyRing1 2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255, 255, 0, 0.6); animation: holyRing2 1.5s ease-in-out infinite;"></div>
+                        
+                        <!-- Main badge -->
+                        <div style="
+                            background: linear-gradient(135deg, #ffd700 0%, #ffed4e 50%, #ffd700 100%);
+                            color: #8B4513;
+                            font-size: 44px;
+                            font-weight: bold;
+                            padding: 16px 36px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 40px rgba(255, 215, 0, 1), 0 0 80px rgba(255, 255, 0, 0.8), inset 0 0 30px rgba(255, 255, 255, 0.5);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 100px;
+                            text-align: center;
+                            animation: divinePulse 1.2s ease-in-out infinite;
+                            border: 4px solid #ffff00;
+                            text-shadow: 0 0 10px #ffffff, 0 0 20px #ffff00, 0 2px 4px rgba(0,0,0,0.3);
+                            position: relative;
+                            z-index: 2;
+                        ">${conversions}</div>
+                        
+                        <!-- Sparkle particles -->
+                        <div style="position: absolute; top: 10%; left: 10%; width: 6px; height: 6px; background: #ffff00; animation: sparkle1 1.5s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        <div style="position: absolute; top: 20%; right: 15%; width: 8px; height: 8px; background: #ffff00; animation: sparkle2 1.8s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        <div style="position: absolute; bottom: 15%; left: 15%; width: 7px; height: 7px; background: #ffffff; animation: sparkle3 2s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        <div style="position: absolute; bottom: 20%; right: 10%; width: 6px; height: 6px; background: #ffd700; animation: sparkle4 1.6s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        <div style="position: absolute; top: 50%; left: 5%; width: 5px; height: 5px; background: #ffff00; animation: sparkle5 2.2s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        <div style="position: absolute; top: 50%; right: 5%; width: 5px; height: 5px; background: #ffffff; animation: sparkle6 1.9s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
+                        
+                        <!-- Light rays -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay1 3s linear infinite; transform-origin: center;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(45deg); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay2 3s linear infinite; transform-origin: center;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay3 3s linear infinite; transform-origin: center;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(135deg); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay4 3s linear infinite; transform-origin: center;"></div>
+                    </div>
+                    <style>
+                        @keyframes divinePulse {
+                            0%, 100% { transform: scale(1); filter: brightness(1); }
+                            50% { transform: scale(1.1); filter: brightness(1.3); }
+                        }
+                        @keyframes holyRing1 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.4; }
+                            50% { transform: translate(-50%, -50%) scale(1.15); opacity: 0.8; }
+                        }
+                        @keyframes holyRing2 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
+                            50% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+                        }
+                        @keyframes sparkle1 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.5) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes sparkle2 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.8) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes sparkle3 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.6) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes sparkle4 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.4) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes sparkle5 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.3) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes sparkle6 {
+                            0%, 100% { transform: scale(0) rotate(0deg); opacity: 0; }
+                            50% { transform: scale(1.7) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes lightRay1 {
+                            0% { transform: translate(-50%, -50%) rotate(0deg); }
+                            100% { transform: translate(-50%, -50%) rotate(360deg); }
+                        }
+                        @keyframes lightRay2 {
+                            0% { transform: translate(-50%, -50%) rotate(45deg); }
+                            100% { transform: translate(-50%, -50%) rotate(405deg); }
+                        }
+                        @keyframes lightRay3 {
+                            0% { transform: translate(-50%, -50%) rotate(90deg); }
+                            100% { transform: translate(-50%, -50%) rotate(450deg); }
+                        }
+                        @keyframes lightRay4 {
+                            0% { transform: translate(-50%, -50%) rotate(135deg); }
+                            100% { transform: translate(-50%, -50%) rotate(495deg); }
+                        }
+                    </style>
+                `;
+                break;
+        }
+        
+        return badgeHTML;
+    }
+
+    function getSnakeEvolution(conversions) {
+        if (conversions === 0 || conversions === 1) {
+            return {
+                stage: 'basic',
+                name: 'Baby Snake',
+                size: 120,
+                height: 60
+            };
+        } else if (conversions === 2) {
+            return {
+                stage: 'evolved',
+                name: 'Cobra',
+                size: 150,
+                height: 75
+            };
+        } else if (conversions === 3) {
+            return {
+                stage: 'venomous',
+                name: 'Viper',
+                size: 180,
+                height: 90
+            };
+        } else if (conversions === 4) {
+            return {
+                stage: 'demonic',
+                name: 'Demon Snake',
+                size: 210,
+                height: 105
+            };
+        } else {
+            return {
+                stage: 'divine',
+                name: 'Divine Serpent',
+                size: 250,
+                height: 125
+            };
+        }
+    }
+
+    function createEvolutionarySnake(parentNode, totalRow, conversions) {
+        const evolution = getSnakeEvolution(conversions);
+        const snakeRow = document.createElement('tr');
+        snakeRow.id = 'snakeAnimationRow';
+
+        const snakeCell = document.createElement('td');
+        const headerRow = parentNode.closest('table').querySelector('thead tr') || parentNode.closest('table').rows[0];
+        const colCount = headerRow.cells.length;
+        snakeCell.colSpan = colCount;
+
+        const cellHeight = evolution.height + 40;
+        
+        let bgGradient = 'linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%)';
+        let borderColor = '#667eea';
+        
+        if (evolution.stage === 'divine') {
+            bgGradient = 'linear-gradient(135deg, #fff9e6 0%, #ffe9b3 50%, #fff9e6 100%)';
+            borderColor = '#ffd700';
+        } else if (evolution.stage === 'demonic') {
+            bgGradient = 'linear-gradient(135deg, #1a0000 0%, #330000 50%, #1a0000 100%)';
+            borderColor = '#ff0000';
+        }
+
+        snakeCell.style.cssText = `
+            background: ${bgGradient} !important;
+            padding: 20px 0 !important;
+            border-top: 2px solid ${borderColor} !important;
+            overflow: hidden !important;
+            position: relative !important;
+        `;
+
+        let savedPosition = parseFloat(localStorage.getItem('snakePosition') || '0');
+
+        const snakeSVG = getSnakeSVG(evolution);
+        const badgeStyle = getBadgeStyle(evolution.stage, conversions);
+
+        snakeCell.innerHTML = `
+            <div id="snakeContainer" style="position: relative; height: ${cellHeight}px; width: 100%; overflow: hidden;">
+                <div style="position: absolute; top: 10px; left: 20px; color: ${evolution.stage === 'divine' ? '#8B4513' : '#fff'}; font-size: 14px; font-weight: bold; z-index: 5;">
+                    Evolution: ${evolution.name}
+                </div>
+                <div id="snakeWrapper" style="position: absolute; left: ${savedPosition}%; top: 50%; transform: translateY(-50%); display: flex; align-items: center; white-space: nowrap;">
+                    ${snakeSVG}
+                    ${badgeStyle}
+                </div>
+            </div>
+        `;
+
+        snakeRow.appendChild(snakeCell);
+
+        if (totalRow.nextSibling) {
+            parentNode.insertBefore(snakeRow, totalRow.nextSibling);
+        } else {
+            parentNode.appendChild(snakeRow);
+        }
+
+        animateSnake(savedPosition);
+    }
+
+    function getSnakeSVG(evolution) {
+        const size = evolution.size;
+        const height = evolution.height;
+
+        switch(evolution.stage) {
+            case 'basic':
+                return getBasicSnake(size, height);
+            case 'evolved':
+                return getEvolvedSnake(size, height);
+            case 'venomous':
+                return getVenomousSnake(size, height);
+            case 'demonic':
+                return getDemonicSnake(size, height);
+            case 'divine':
+                return getDivineSnake(size, height);
+            default:
+                return getBasicSnake(size, height);
+        }
+    }
+
+    // Stage 1: Basic Snake (0-1 conversions)
+    function getBasicSnake(w, h) {
+        return `
+            <svg width="${w}" height="${h}" viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));">
+                <defs>
+                    <linearGradient id="snakeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#2d5016;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#4a7c23;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#2d5016;stop-opacity:1" />
+                    </linearGradient>
+                    <radialGradient id="eyeGradient">
+                        <stop offset="0%" style="stop-color:#ffff00;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#ff0000;stop-opacity:1" />
+                    </radialGradient>
+                </defs>
+                <ellipse cx="10" cy="30" rx="6" ry="8" fill="url(#snakeGradient)">
+                    <animate attributeName="ry" values="8;10;8" dur="1s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="25" cy="30" rx="10" ry="12" fill="url(#snakeGradient)">
+                    <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite"/>
+                    <animate attributeName="ry" values="12;14;12" dur="1s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="42" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
+                    <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.2s"/>
+                    <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.2s"/>
+                </ellipse>
+                <ellipse cx="60" cy="30" rx="12" ry="14" fill="url(#snakeGradient)">
+                    <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.4s"/>
+                    <animate attributeName="ry" values="14;16;14" dur="1s" repeatCount="indefinite" begin="0.4s"/>
+                </ellipse>
+                <ellipse cx="78" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
+                    <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.6s"/>
+                </ellipse>
+                <ellipse cx="95" cy="30" rx="13" ry="15" fill="url(#snakeGradient)">
+                    <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </ellipse>
+                <path d="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
+                      fill="#3d6b1f" stroke="#2d5016" stroke-width="1">
+                    <animate attributeName="d"
+                             values="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45;
+                                     M 95 15 Q 106 20 111 25 Q 106 28 95 30 Q 106 32 111 35 Q 106 40 95 45;
+                                     M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
+                             dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </path>
+                <circle cx="98" cy="25" r="3" fill="url(#eyeGradient)">
+                    <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="98" cy="35" r="3" fill="url(#eyeGradient)">
+                    <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="99" cy="25" r="1.5" fill="#000">
+                    <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="99" cy="35" r="1.5" fill="#000">
+                    <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <path d="M 110 30 L 118 28 M 110 30 L 118 32" stroke="#ff0000" stroke-width="1.5" fill="none">
+                    <animate attributeName="d"
+                             values="M 110 30 L 118 28 M 110 30 L 118 32;
+                                     M 110 30 L 116 28 M 110 30 L 116 32;
+                                     M 110 30 L 118 28 M 110 30 L 118 32"
+                             dur="0.5s" repeatCount="indefinite"/>
+                </path>
+            </svg>
+        `;
+    }
+
+    // Stage 2: Evolved Cobra (2 conversions) - Bigger, Blue-ish
+    function getEvolvedSnake(w, h) {
+        return `
+            <svg width="${w}" height="${h}" viewBox="0 0 150 75" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 6px 12px rgba(0,100,200,0.4));">
+                <defs>
+                    <linearGradient id="evolvedGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#1e3a5f;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#2e5a8f;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#1e3a5f;stop-opacity:1" />
+                    </linearGradient>
+                    <radialGradient id="evolvedEye">
+                        <stop offset="0%" style="stop-color:#00ffff;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#0088ff;stop-opacity:1" />
+                    </radialGradient>
+                </defs>
+                <!-- Larger body segments -->
+                <ellipse cx="12" cy="37.5" rx="8" ry="11" fill="url(#evolvedGradient)">
+                    <animate attributeName="ry" values="11;13;11" dur="0.9s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="30" cy="37.5" rx="12" ry="15" fill="url(#evolvedGradient)">
+                    <animate attributeName="cy" values="37.5;35;37.5" dur="0.9s" repeatCount="indefinite"/>
+                    <animate attributeName="ry" values="15;17;15" dur="0.9s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="52" cy="37.5" rx="14" ry="17" fill="url(#evolvedGradient)">
+                    <animate attributeName="cy" values="37.5;40;37.5" dur="0.9s" repeatCount="indefinite" begin="0.2s"/>
+                    <animate attributeName="ry" values="17;19;17" dur="0.9s" repeatCount="indefinite" begin="0.2s"/>
+                </ellipse>
+                <ellipse cx="75" cy="37.5" rx="15" ry="18" fill="url(#evolvedGradient)">
+                    <animate attributeName="cy" values="37.5;35;37.5" dur="0.9s" repeatCount="indefinite" begin="0.4s"/>
+                    <animate attributeName="ry" values="18;20;18" dur="0.9s" repeatCount="indefinite" begin="0.4s"/>
+                </ellipse>
+                <ellipse cx="98" cy="37.5" rx="14" ry="17" fill="url(#evolvedGradient)">
+                    <animate attributeName="cy" values="37.5;40;37.5" dur="0.9s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="ry" values="17;19;17" dur="0.9s" repeatCount="indefinite" begin="0.6s"/>
+                </ellipse>
+                <ellipse cx="119" cy="37.5" rx="16" ry="19" fill="url(#evolvedGradient)">
+                    <animate attributeName="cy" values="37.5;35;37.5" dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </ellipse>
+                <!-- Cobra hood -->
+                <path d="M 119 20 Q 130 22 138 30 Q 130 37.5 119 37.5 Q 130 37.5 138 45 Q 130 53 119 55"
+                      fill="#3a5a8f" stroke="#1e3a5f" stroke-width="1.5" opacity="0.9">
+                    <animate attributeName="d"
+                             values="M 119 20 Q 130 22 138 30 Q 130 37.5 119 37.5 Q 130 37.5 138 45 Q 130 53 119 55;
+                                     M 119 18 Q 132 22 140 30 Q 132 37.5 119 37.5 Q 132 37.5 140 45 Q 132 53 119 57;
+                                     M 119 20 Q 130 22 138 30 Q 130 37.5 119 37.5 Q 130 37.5 138 45 Q 130 53 119 55"
+                             dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </path>
+                <!-- Eyes -->
+                <circle cx="122" cy="31" r="4" fill="url(#evolvedEye)">
+                    <animate attributeName="cy" values="31;29;31" dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="122" cy="44" r="4" fill="url(#evolvedEye)">
+                    <animate attributeName="cy" values="44;42;44" dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="123" cy="31" r="2" fill="#000">
+                    <animate attributeName="cy" values="31;29;31" dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="123" cy="44" r="2" fill="#000">
+                    <animate attributeName="cy" values="44;42;44" dur="0.9s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <!-- Tongue -->
+                <path d="M 138 37.5 L 147 35 M 138 37.5 L 147 40" stroke="#00ffff" stroke-width="2" fill="none">
+                    <animate attributeName="d"
+                             values="M 138 37.5 L 147 35 M 138 37.5 L 147 40;
+                                     M 138 37.5 L 143 35 M 138 37.5 L 143 40;
+                                     M 138 37.5 L 147 35 M 138 37.5 L 147 40"
+                             dur="0.5s" repeatCount="indefinite"/>
+                </path>
+                <!-- Scales pattern -->
+                <circle cx="38" cy="33" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="43" cy="40" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="60" cy="33" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="65" cy="40" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="83" cy="33" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="88" cy="40" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="105" cy="33" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+                <circle cx="110" cy="40" r="2.5" fill="#4a7aaf" opacity="0.7"/>
+            </svg>
+        `;
+    }
+
+    // Stage 3: Venomous Viper (3 conversions) - Purple with deadly fangs
+    function getVenomousSnake(w, h) {
+        return `
+            <svg width="${w}" height="${h}" viewBox="0 0 180 90" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 8px 16px rgba(128,0,128,0.5));">
+                <defs>
+                    <linearGradient id="venomGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#4a0e4e;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#7a1e7e;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#4a0e4e;stop-opacity:1" />
+                    </linearGradient>
+                    <radialGradient id="venomEye">
+                        <stop offset="0%" style="stop-color:#ff00ff;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#8800ff;stop-opacity:1" />
+                    </radialGradient>
+                    <linearGradient id="venomFang" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#00ff00;stop-opacity:0.8" />
+                    </linearGradient>
+                </defs>
+                <!-- Body segments - larger and more menacing -->
+                <ellipse cx="15" cy="45" rx="10" ry="14" fill="url(#venomGradient)">
+                    <animate attributeName="ry" values="14;16;14" dur="0.8s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="36" cy="45" rx="14" ry="18" fill="url(#venomGradient)">
+                    <animate attributeName="cy" values="45;42;45" dur="0.8s" repeatCount="indefinite"/>
+                    <animate attributeName="ry" values="18;20;18" dur="0.8s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="62" cy="45" rx="16" ry="20" fill="url(#venomGradient)">
+                    <animate attributeName="cy" values="45;48;45" dur="0.8s" repeatCount="indefinite" begin="0.2s"/>
+                    <animate attributeName="ry" values="20;22;20" dur="0.8s" repeatCount="indefinite" begin="0.2s"/>
+                </ellipse>
+                <ellipse cx="90" cy="45" rx="18" ry="22" fill="url(#venomGradient)">
+                    <animate attributeName="cy" values="45;42;45" dur="0.8s" repeatCount="indefinite" begin="0.4s"/>
+                    <animate attributeName="ry" values="22;24;22" dur="0.8s" repeatCount="indefinite" begin="0.4s"/>
+                </ellipse>
+                <ellipse cx="118" cy="45" rx="16" ry="20" fill="url(#venomGradient)">
+                    <animate attributeName="cy" values="45;48;45" dur="0.8s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="ry" values="20;22;20" dur="0.8s" repeatCount="indefinite" begin="0.6s"/>
+                </ellipse>
+                <ellipse cx="143" cy="45" rx="19" ry="23" fill="url(#venomGradient)">
+                    <animate attributeName="cy" values="45;42;45" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                </ellipse>
+                <!-- Viper head with hood -->
+                <path d="M 143 22 Q 156 24 166 35 Q 156 45 143 45 Q 156 45 166 55 Q 156 66 143 68"
+                      fill="#5a1e5e" stroke="#4a0e4e" stroke-width="2" opacity="0.95">
+                    <animate attributeName="d"
+                             values="M 143 22 Q 156 24 166 35 Q 156 45 143 45 Q 156 45 166 55 Q 156 66 143 68;
+                                     M 143 20 Q 159 24 169 35 Q 159 45 143 45 Q 159 45 169 55 Q 159 66 143 70;
+                                     M 143 22 Q 156 24 166 35 Q 156 45 143 45 Q 156 45 166 55 Q 156 66 143 68"
+                             dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                </path>
+                <!-- DEADLY FANGS - dripping venom -->
+                <path d="M 166 40 L 170 50 L 168 50 Z" fill="url(#venomFang)" stroke="#006400" stroke-width="0.5">
+                    <animate attributeName="opacity" values="1;0.8;1" dur="0.6s" repeatCount="indefinite"/>
+                </path>
+                <path d="M 166 50 L 170 40 L 168 40 Z" fill="url(#venomFang)" stroke="#006400" stroke-width="0.5">
+                    <animate attributeName="opacity" values="1;0.8;1" dur="0.6s" repeatCount="indefinite" begin="0.3s"/>
+                </path>
+                <!-- Venom drips -->
+                <circle cx="170" cy="51" r="1" fill="#00ff00" opacity="0.8">
+                    <animate attributeName="cy" values="51;56;51" dur="1.5s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="170" cy="39" r="1" fill="#00ff00" opacity="0.8">
+                    <animate attributeName="cy" values="39;34;39" dur="1.5s" repeatCount="indefinite" begin="0.7s"/>
+                    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.5s" repeatCount="indefinite" begin="0.7s"/>
+                </circle>
+                <!-- Eyes - glowing purple -->
+                <circle cx="146" cy="37" r="5" fill="url(#venomEye)">
+                    <animate attributeName="cy" values="37;35;37" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="5;5.5;5" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="146" cy="53" r="5" fill="url(#venomEye)">
+                    <animate attributeName="cy" values="53;51;53" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="5;5.5;5" dur="2s" repeatCount="indefinite" begin="1s"/>
+                </circle>
+                <circle cx="147" cy="37" r="2.5" fill="#000">
+                    <animate attributeName="cy" values="37;35;37" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="147" cy="53" r="2.5" fill="#000">
+                    <animate attributeName="cy" values="53;51;53" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <!-- Forked tongue -->
+                <path d="M 166 45 L 176 42 M 166 45 L 176 48" stroke="#ff00ff" stroke-width="2.5" fill="none">
+                    <animate attributeName="d"
+                             values="M 166 45 L 176 42 M 166 45 L 176 48;
+                                     M 166 45 L 171 42 M 166 45 L 171 48;
+                                     M 166 45 L 176 42 M 166 45 L 176 48"
+                             dur="0.4s" repeatCount="indefinite"/>
+                </path>
+                <!-- Venomous scales -->
+                <circle cx="45" cy="40" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="50" cy="48" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="72" cy="40" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="77" cy="48" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="99" cy="40" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="104" cy="48" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="127" cy="40" r="3" fill="#9a2e9e" opacity="0.8"/>
+                <circle cx="132" cy="48" r="3" fill="#9a2e9e" opacity="0.8"/>
+            </svg>
+        `;
+    }
+
+    // Stage 4: Demonic Snake (4 conversions) - Red/Black with horns
+    function getDemonicSnake(w, h) {
+        return `
+            <svg width="${w}" height="${h}" viewBox="0 0 210 105" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 10px 20px rgba(255,0,0,0.6));">
+                <defs>
+                    <linearGradient id="demonGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#1a0000;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#660000;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#1a0000;stop-opacity:1" />
+                    </linearGradient>
+                    <radialGradient id="demonEye">
+                        <stop offset="0%" style="stop-color:#ff0000;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#ff6600;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#990000;stop-opacity:1" />
+                    </radialGradient>
+                    <linearGradient id="hornGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#330000;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#000000;stop-opacity:1" />
+                    </linearGradient>
+                    <filter id="demonGlow">
+                        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                </defs>
+                <!-- Hellfire aura in background -->
+                <circle cx="170" cy="52.5" r="35" fill="#ff0000" opacity="0.1">
+                    <animate attributeName="r" values="35;40;35" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.1;0.2;0.1" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <!-- Body segments - massive and demonic -->
+                <ellipse cx="18" cy="52.5" rx="12" ry="17" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="ry" values="17;19;17" dur="0.7s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="42" cy="52.5" rx="16" ry="21" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="cy" values="52.5;49;52.5" dur="0.7s" repeatCount="indefinite"/>
+                    <animate attributeName="ry" values="21;23;21" dur="0.7s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="72" cy="52.5" rx="19" ry="24" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="cy" values="52.5;56;52.5" dur="0.7s" repeatCount="indefinite" begin="0.2s"/>
+                    <animate attributeName="ry" values="24;26;24" dur="0.7s" repeatCount="indefinite" begin="0.2s"/>
+                </ellipse>
+                <ellipse cx="105" cy="52.5" rx="21" ry="26" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="cy" values="52.5;49;52.5" dur="0.7s" repeatCount="indefinite" begin="0.4s"/>
+                    <animate attributeName="ry" values="26;28;26" dur="0.7s" repeatCount="indefinite" begin="0.4s"/>
+                </ellipse>
+                <ellipse cx="138" cy="52.5" rx="19" ry="24" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="cy" values="52.5;56;52.5" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="ry" values="24;26;24" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+                </ellipse>
+                <ellipse cx="167" cy="52.5" rx="22" ry="27" fill="url(#demonGradient)" stroke="#ff0000" stroke-width="1">
+                    <animate attributeName="cy" values="52.5;49;52.5" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                </ellipse>
+                <!-- Demon head -->
+                <path d="M 167 25 Q 182 27 193 41 Q 182 52.5 167 52.5 Q 182 52.5 193 64 Q 182 78 167 80"
+                      fill="#330000" stroke="#ff0000" stroke-width="2.5" filter="url(#demonGlow)">
+                    <animate attributeName="d"
+                             values="M 167 25 Q 182 27 193 41 Q 182 52.5 167 52.5 Q 182 52.5 193 64 Q 182 78 167 80;
+                                     M 167 23 Q 186 27 197 41 Q 186 52.5 167 52.5 Q 186 52.5 197 64 Q 186 78 167 82;
+                                     M 167 25 Q 182 27 193 41 Q 182 52.5 167 52.5 Q 182 52.5 193 64 Q 182 78 167 80"
+                             dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                </path>
+                <!-- DEMON HORNS -->
+                <path d="M 172 30 Q 175 20 180 15 Q 178 25 176 30 Z" fill="url(#hornGrad)" stroke="#000" stroke-width="1">
+                    <animate attributeName="d"
+                             values="M 172 30 Q 175 20 180 15 Q 178 25 176 30 Z;
+                                     M 172 30 Q 175 18 181 13 Q 179 25 176 30 Z;
+                                     M 172 30 Q 175 20 180 15 Q 178 25 176 30 Z"
+                             dur="1.5s" repeatCount="indefinite"/>
+                </path>
+                <path d="M 172 75 Q 175 85 180 90 Q 178 80 176 75 Z" fill="url(#hornGrad)" stroke="#000" stroke-width="1">
+                    <animate attributeName="d"
+                             values="M 172 75 Q 175 85 180 90 Q 178 80 176 75 Z;
+                                     M 172 75 Q 175 87 181 92 Q 179 80 176 75 Z;
+                                     M 172 75 Q 175 85 180 90 Q 178 80 176 75 Z"
+                             dur="1.5s" repeatCount="indefinite" begin="0.7s"/>
+                </path>
+                <!-- Horn tips glow -->
+                <circle cx="180" cy="15" r="2" fill="#ff0000" opacity="0.8">
+                    <animate attributeName="opacity" values="0.8;1;0.8" dur="1s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="180" cy="90" r="2" fill="#ff0000" opacity="0.8">
+                    <animate attributeName="opacity" values="0.8;1;0.8" dur="1s" repeatCount="indefinite" begin="0.5s"/>
+                </circle>
+                <!-- Demonic fangs -->
+                <path d="M 193 47 L 198 58 L 195 58 Z" fill="#ffffff" stroke="#660000" stroke-width="0.8" opacity="0.95"/>
+                <path d="M 193 58 L 198 47 L 195 47 Z" fill="#ffffff" stroke="#660000" stroke-width="0.8" opacity="0.95"/>
+                <!-- Hellfire drips -->
+                <circle cx="198" cy="59" r="1.5" fill="#ff6600">
+                    <animate attributeName="cy" values="59;65;59" dur="1.2s" repeatCount="indefinite"/>
+                    <animate attributeName="fill" values="#ff6600;#ff0000;#ff6600" dur="1.2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="198" cy="46" r="1.5" fill="#ff6600">
+                    <animate attributeName="cy" values="46;40;46" dur="1.2s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="fill" values="#ff6600;#ff0000;#ff6600" dur="1.2s" repeatCount="indefinite" begin="0.6s"/>
+                </circle>
+                <!-- Hellfire eyes -->
+                <circle cx="170" cy="43" r="6" fill="url(#demonEye)" filter="url(#demonGlow)">
+                    <animate attributeName="cy" values="43;41;43" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="6;7;6" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="170" cy="62" r="6" fill="url(#demonEye)" filter="url(#demonGlow)">
+                    <animate attributeName="cy" values="62;60;62" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="6;7;6" dur="1.5s" repeatCount="indefinite" begin="0.75s"/>
+                </circle>
+                <circle cx="171" cy="43" r="3" fill="#000">
+                    <animate attributeName="cy" values="43;41;43" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="171" cy="62" r="3" fill="#000">
+                    <animate attributeName="cy" values="62;60;62" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <!-- Hellfire tongue -->
+                <path d="M 193 52.5 L 205 49 M 193 52.5 L 205 56" stroke="#ff3300" stroke-width="3" fill="none" filter="url(#demonGlow)">
+                    <animate attributeName="d"
+                             values="M 193 52.5 L 205 49 M 193 52.5 L 205 56;
+                                     M 193 52.5 L 200 49 M 193 52.5 L 200 56;
+                                     M 193 52.5 L 205 49 M 193 52.5 L 205 56"
+                             dur="0.3s" repeatCount="indefinite"/>
+                    <animate attributeName="stroke" values="#ff3300;#ff0000;#ff6600;#ff3300" dur="0.8s" repeatCount="indefinite"/>
+                </path>
+                <!-- Demonic scales -->
+                <circle cx="52" cy="47" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="57" cy="56" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="84" cy="47" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="89" cy="56" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="115" cy="47" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="120" cy="56" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="148" cy="47" r="3.5" fill="#990000" opacity="0.9"/>
+                <circle cx="153" cy="56" r="3.5" fill="#990000" opacity="0.9"/>
+            </svg>
+        `;
+    }
+
+    // Stage 5: Divine/Saint Snake (5+ conversions) - Golden with angel wings
+    function getDivineSnake(w, h) {
+        return `
+            <svg width="${w}" height="${h}" viewBox="0 0 250 125" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 12px 24px rgba(255,215,0,0.6));">
+                <defs>
+                    <linearGradient id="divineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ffd700;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#ffed4e;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#ffd700;stop-opacity:1" />
+                    </linearGradient>
+                    <radialGradient id="divineEye">
+                        <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#ffff00;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#ffd700;stop-opacity:1" />
+                    </radialGradient>
+                    <linearGradient id="wingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.9" />
+                        <stop offset="50%" style="stop-color:#f0f0f0;stop-opacity:0.8" />
+                        <stop offset="100%" style="stop-color:#e0e0e0;stop-opacity:0.9" />
+                    </linearGradient>
+                    <filter id="divineGlow">
+                        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                    <radialGradient id="auraGradient">
+                        <stop offset="0%" style="stop-color:#ffff00;stop-opacity:0.4" />
+                        <stop offset="50%" style="stop-color:#ffd700;stop-opacity:0.2" />
+                        <stop offset="100%" style="stop-color:#ffa500;stop-opacity:0" />
+                    </radialGradient>
+                </defs>
+                <!-- SUPER SAIYAN AURA -->
+                <circle cx="200" cy="62.5" r="55" fill="url(#auraGradient)">
+                    <animate attributeName="r" values="55;65;55" dur="1.5s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.6;0.9;0.6" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="200" cy="62.5" r="45" fill="url(#auraGradient)">
+                    <animate attributeName="r" values="45;55;45" dur="1.2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.7;1;0.7" dur="1.2s" repeatCount="indefinite"/>
+                </circle>
+                <!-- Aura sparks -->
+                <circle cx="180" cy="30" r="2" fill="#ffff00">
+                    <animate attributeName="opacity" values="0;1;0" dur="0.8s" repeatCount="indefinite"/>
+                    <animate attributeName="cy" values="30;25;30" dur="0.8s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="220" cy="40" r="2" fill="#ffff00">
+                    <animate attributeName="opacity" values="0;1;0" dur="0.9s" repeatCount="indefinite" begin="0.3s"/>
+                    <animate attributeName="cx" values="220;225;220" dur="0.9s" repeatCount="indefinite" begin="0.3s"/>
+                </circle>
+                <circle cx="195" cy="95" r="2" fill="#ffff00">
+                    <animate attributeName="opacity" values="0;1;0" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="cy" values="95;100;95" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+                </circle>
+                <!-- ANGEL WINGS - Left Wing -->
+                <g transform="translate(200, 62.5)">
+                    <ellipse cx="-35" cy="-15" rx="25" ry="35" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.95">
+                        <animate attributeName="ry" values="35;38;35" dur="2s" repeatCount="indefinite"/>
+                        <animate attributeName="cx" values="-35;-37;-35" dur="2s" repeatCount="indefinite"/>
+                    </ellipse>
+                    <ellipse cx="-40" cy="-5" rx="20" ry="30" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.9">
+                        <animate attributeName="ry" values="30;33;30" dur="2s" repeatCount="indefinite" begin="0.3s"/>
+                        <animate attributeName="cx" values="-40;-42;-40" dur="2s" repeatCount="indefinite" begin="0.3s"/>
+                    </ellipse>
+                    <ellipse cx="-43" cy="8" rx="18" ry="25" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.85">
+                        <animate attributeName="ry" values="25;28;25" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+                        <animate attributeName="cx" values="-43;-45;-43" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+                    </ellipse>
+                    <!-- Wing feather details -->
+                    <line x1="-30" y1="-15" x2="-50" y2="-20" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                    <line x1="-35" y1="-5" x2="-55" y2="-8" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                    <line x1="-38" y1="5" x2="-58" y2="4" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                </g>
+                <!-- ANGEL WINGS - Right Wing -->
+                <g transform="translate(200, 62.5)">
+                    <ellipse cx="-35" cy="15" rx="25" ry="35" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.95">
+                        <animate attributeName="ry" values="35;38;35" dur="2s" repeatCount="indefinite"/>
+                        <animate attributeName="cx" values="-35;-37;-35" dur="2s" repeatCount="indefinite"/>
+                    </ellipse>
+                    <ellipse cx="-40" cy="5" rx="20" ry="30" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.9">
+                        <animate attributeName="ry" values="30;33;30" dur="2s" repeatCount="indefinite" begin="0.3s"/>
+                        <animate attributeName="cx" values="-40;-42;-40" dur="2s" repeatCount="indefinite" begin="0.3s"/>
+                    </ellipse>
+                    <ellipse cx="-43" cy="-8" rx="18" ry="25" fill="url(#wingGradient)" stroke="#d4af37" stroke-width="1.5" opacity="0.85">
+                        <animate attributeName="ry" values="25;28;25" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+                        <animate attributeName="cx" values="-43;-45;-43" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+                    </ellipse>
+                    <!-- Wing feather details -->
+                    <line x1="-30" y1="15" x2="-50" y2="20" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                    <line x1="-35" y1="5" x2="-55" y2="8" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                    <line x1="-38" y1="-5" x2="-58" y2="-4" stroke="#d4af37" stroke-width="0.8" opacity="0.6"/>
+                </g>
+                <!-- Divine body segments - golden and majestic -->
+                <ellipse cx="21" cy="62.5" rx="14" ry="20" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="ry" values="20;22;20" dur="0.6s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="49" cy="62.5" rx="19" ry="25" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="62.5;59;62.5" dur="0.6s" repeatCount="indefinite"/>
+                    <animate attributeName="ry" values="25;27;25" dur="0.6s" repeatCount="indefinite"/>
+                </ellipse>
+                <ellipse cx="84" cy="62.5" rx="22" ry="28" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="62.5;66;62.5" dur="0.6s" repeatCount="indefinite" begin="0.2s"/>
+                    <animate attributeName="ry" values="28;30;28" dur="0.6s" repeatCount="indefinite" begin="0.2s"/>
+                </ellipse>
+                <ellipse cx="123" cy="62.5" rx="25" ry="31" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="62.5;59;62.5" dur="0.6s" repeatCount="indefinite" begin="0.4s"/>
+                    <animate attributeName="ry" values="31;33;31" dur="0.6s" repeatCount="indefinite" begin="0.4s"/>
+                </ellipse>
+                <ellipse cx="161" cy="62.5" rx="22" ry="28" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="62.5;66;62.5" dur="0.6s" repeatCount="indefinite" begin="0.6s"/>
+                    <animate attributeName="ry" values="28;30;28" dur="0.6s" repeatCount="indefinite" begin="0.6s"/>
+                </ellipse>
+                <ellipse cx="195" cy="62.5" rx="26" ry="32" fill="url(#divineGradient)" stroke="#b8860b" stroke-width="1.5" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="62.5;59;62.5" dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                </ellipse>
+                <!-- Divine head with holy crown -->
+                <path d="M 195 32 Q 213 34 226 49 Q 213 62.5 195 62.5 Q 213 62.5 226 76 Q 213 91 195 93"
+                      fill="#ffed4e" stroke="#b8860b" stroke-width="2.5" filter="url(#divineGlow)">
+                    <animate attributeName="d"
+                             values="M 195 32 Q 213 34 226 49 Q 213 62.5 195 62.5 Q 213 62.5 226 76 Q 213 91 195 93;
+                                     M 195 30 Q 218 34 231 49 Q 218 62.5 195 62.5 Q 218 62.5 231 76 Q 218 91 195 95;
+                                     M 195 32 Q 213 34 226 49 Q 213 62.5 195 62.5 Q 213 62.5 226 76 Q 213 91 195 93"
+                             dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                </path>
+                <!-- HOLY CROWN/HALO -->
+                <circle cx="200" cy="25" r="15" fill="none" stroke="#ffff00" stroke-width="2.5" opacity="0.8" filter="url(#divineGlow)">
+                    <animate attributeName="r" values="15;17;15" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.8;1;0.8" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="200" cy="25" r="12" fill="none" stroke="#ffd700" stroke-width="2" opacity="0.6">
+                    <animate attributeName="r" values="12;14;12" dur="1.8s" repeatCount="indefinite"/>
+                </circle>
+                <!-- Crown points -->
+                <path d="M 200 10 L 203 18 L 197 18 Z" fill="#ffff00" filter="url(#divineGlow)"/>
+                <path d="M 188 15 L 191 23 L 185 23 Z" fill="#ffff00" filter="url(#divineGlow)"/>
+                <path d="M 212 15 L 215 23 L 209 23 Z" fill="#ffff00" filter="url(#divineGlow)"/>
+                <!-- Divine eyes - pure light -->
+                <circle cx="198" cy="51" r="7" fill="url(#divineEye)" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="51;49;51" dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="7;8;7" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="198" cy="74" r="7" fill="url(#divineEye)" filter="url(#divineGlow)">
+                    <animate attributeName="cy" values="74;72;74" dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                    <animate attributeName="r" values="7;8;7" dur="1.5s" repeatCount="indefinite" begin="0.75s"/>
+                </circle>
+                <circle cx="199" cy="51" r="3.5" fill="#fff">
+                    <animate attributeName="cy" values="51;49;51" dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <circle cx="199" cy="74" r="3.5" fill="#fff">
+                    <animate attributeName="cy" values="74;72;74" dur="0.6s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+                <!-- Holy light breath -->
+                <path d="M 226 62.5 L 238 59 M 226 62.5 L 238 66" stroke="#ffff00" stroke-width="3.5" fill="none" filter="url(#divineGlow)">
+                    <animate attributeName="d"
+                             values="M 226 62.5 L 238 59 M 226 62.5 L 238 66;
+                                     M 226 62.5 L 233 59 M 226 62.5 L 233 66;
+                                     M 226 62.5 L 238 59 M 226 62.5 L 238 66"
+                             dur="0.3s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="1;0.7;1" dur="0.6s" repeatCount="indefinite"/>
+                </path>
+                <!-- Divine scales with shimmer -->
+                <circle cx="61" cy="56" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="66" cy="66" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.3s"/>
+                </circle>
+                <circle cx="98" cy="56" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.6s"/>
+                </circle>
+                <circle cx="103" cy="66" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.9s"/>
+                </circle>
+                <circle cx="135" cy="56" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="1.2s"/>
+                </circle>
+                <circle cx="140" cy="66" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.2s"/>
+                </circle>
+                <circle cx="173" cy="56" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.5s"/>
+                </circle>
+                <circle cx="178" cy="66" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.8s"/>
+                </circle>
+            </svg>
+        `;
+    }
+
+    function animateSnake(startPosition) {
+        const wrapper = document.getElementById('snakeWrapper');
+        const container = document.getElementById('snakeContainer');
+
+        if (!wrapper || !container) return;
+
+        let position = startPosition;
+        const speed = 0.15;
+
+        function animate() {
+            position += speed;
+
+            if (position > 110) {
+                position = -30;
+            }
+
+            wrapper.style.left = position + '%';
+            localStorage.setItem('snakePosition', position.toString());
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    }
+
+    // ===== GLOBAL STYLES =====
+    function addGlobalStyles() {
+        if (document.getElementById('galaxyEnhancedStyles')) return;
+
+        const style = document.createElement('style');
+        style.id = 'galaxyEnhancedStyles';
+        style.textContent = `
+            body {
+                overflow-x: hidden !important;
+            }
+            table {
+                border-collapse: separate !important;
+                border-spacing: 0 !important;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+                border-radius: 8px !important;
+                overflow: hidden !important;
+                background: rgba(255, 255, 255, 0.95) !important;
+            }
+            table th {
+                position: sticky !important;
+                top: 0 !important;
+                z-index: 10 !important;
+            }
+            table tbody tr:hover {
+                background-color: rgba(102, 126, 234, 0.05) !important;
+                transition: background-color 0.2s ease !important;
+            }
+            table td {
+                padding: 12px 10px !important;
+            }
+            table tbody tr:has(td:first-child:contains("TOTAL")) {
+                background: linear-gradient(90deg, #f9fafb 0%, #f3f4f6 100%) !important;
+                font-weight: 700 !important;
+                border-top: 3px solid #667eea !important;
+            }
+            table td:nth-child(3),
+            table td:nth-child(4),
+            table td:nth-child(5),
+            table td:nth-child(6),
+            table td:nth-child(7),
+            table td:nth-child(8) {
+                text-align: center !important;
+            }
+            table td a:hover {
+                text-decoration: underline !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+})();
