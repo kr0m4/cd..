@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Snake Evolution GWR
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Conversion rate toggle with evolutionary snake animation
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/report/offer*
@@ -15,7 +15,6 @@
 
     // ===== STATE MANAGEMENT =====
     let currentConversions = 0;
-    let previousConversions = parseInt(localStorage.getItem('previousConversions') || '0');
     // Load saved state from localStorage, default to false (original conversions)
     let showConversionRate = localStorage.getItem('showConversionRate') === 'true';
     let originalConversionsData = {}; // Store original conversion values
@@ -132,142 +131,11 @@
         return null;
     }
 
-    // ===== KILL STREAK ANNOUNCEMENTS =====
-    function getKillStreakText(conversions) {
-        const killStreaks = {
-            1: { text: 'First Blood!', color: '#ff0000' },
-            2: { text: 'Double Kill!', color: '#0066ff' },
-            3: { text: 'Triple Kill!!!', color: '#00ff00' },
-            4: { text: 'Ultra Kill!!!', color: '#00ffff' },
-            5: { text: 'Rampage!!!', color: '#9370db' },
-            6: { text: 'Mega Kill!!!!', color: '#ff6600' },
-            7: { text: 'Unstoppable!!!!', color: '#ff00ff' },
-            8: { text: 'Wicked Sick!!!!!', color: '#ffff00' },
-            9: { text: 'Monster Kill!!!!!!', color: '#ff1493' },
-            10: { text: 'GODLIKE!!!!!!!', color: '#ffd700' }
-        };
-
-        if (conversions >= 10) {
-            return { text: 'GODLIKE!!!!!!!', color: '#ffd700' };
-        }
-
-        return killStreaks[conversions] || { text: 'Kill!', color: '#ffffff' };
-    }
-
-    function showKillStreakAnnouncement(conversions, username) {
-        const killStreak = getKillStreakText(conversions);
-        
-        // Create fullscreen overlay
-        const overlay = document.createElement('div');
-        overlay.id = 'killStreakOverlay';
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: #000000;
-            z-index: 999999;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            animation: fadeIn 0.3s ease-in;
-        `;
-
-        overlay.innerHTML = `
-            <style>
-                @keyframes fadeIn {
-                    from { opacity: 0; }
-                    to { opacity: 1; }
-                }
-                @keyframes fadeOut {
-                    from { opacity: 1; }
-                    to { opacity: 0; }
-                }
-                @keyframes slideInFromTop {
-                    from { transform: translateY(-100px); opacity: 0; }
-                    to { transform: translateY(0); opacity: 1; }
-                }
-                @keyframes slideInFromBottom {
-                    from { transform: translateY(100px); opacity: 0; }
-                    to { transform: translateY(0); opacity: 1; }
-                }
-                @keyframes pulseGlow {
-                    0%, 100% { 
-                        text-shadow: 0 0 10px ${killStreak.color}, 
-                                     0 0 20px ${killStreak.color}, 
-                                     0 0 30px ${killStreak.color},
-                                     0 0 40px ${killStreak.color};
-                        transform: scale(1);
-                    }
-                    50% { 
-                        text-shadow: 0 0 20px ${killStreak.color}, 
-                                     0 0 30px ${killStreak.color}, 
-                                     0 0 40px ${killStreak.color},
-                                     0 0 60px ${killStreak.color},
-                                     0 0 80px ${killStreak.color};
-                        transform: scale(1.1);
-                    }
-                }
-                @keyframes shake {
-                    0%, 100% { transform: translateX(0) rotate(0deg); }
-                    10% { transform: translateX(-10px) rotate(-2deg); }
-                    20% { transform: translateX(10px) rotate(2deg); }
-                    30% { transform: translateX(-10px) rotate(-2deg); }
-                    40% { transform: translateX(10px) rotate(2deg); }
-                    50% { transform: translateX(-10px) rotate(-2deg); }
-                    60% { transform: translateX(10px) rotate(2deg); }
-                    70% { transform: translateX(-10px) rotate(-2deg); }
-                    80% { transform: translateX(10px) rotate(2deg); }
-                    90% { transform: translateX(-10px) rotate(-2deg); }
-                }
-            </style>
-            <div style="
-                color: #ffffff;
-                font-size: 48px;
-                font-weight: bold;
-                font-family: 'Arial Black', sans-serif;
-                margin-bottom: 40px;
-                animation: slideInFromTop 0.6s ease-out;
-            ">${username}</div>
-            <div style="
-                color: #cccccc;
-                font-size: 36px;
-                font-weight: normal;
-                font-family: Arial, sans-serif;
-                margin-bottom: 20px;
-                animation: slideInFromTop 0.8s ease-out;
-            ">just drew</div>
-            <div style="
-                color: ${killStreak.color};
-                font-size: 72px;
-                font-weight: bold;
-                font-family: 'Arial Black', sans-serif;
-                animation: slideInFromBottom 0.6s ease-out, pulseGlow 1.5s ease-in-out infinite, shake 0.5s ease-in-out;
-                text-transform: uppercase;
-                letter-spacing: 4px;
-            ">${killStreak.text}</div>
-        `;
-
-        document.body.appendChild(overlay);
-
-        // Remove overlay after 3 seconds
-        setTimeout(() => {
-            overlay.style.animation = 'fadeOut 0.5s ease-out';
-            setTimeout(() => {
-                if (overlay.parentNode) {
-                    overlay.parentNode.removeChild(overlay);
-                }
-            }, 500);
-        }, 3000);
-    }
-
     // ===== MAIN INITIALIZATION =====
     window.addEventListener('load', function() {
         // Extract username
         username = extractUsername();
-        
+
         enhanceReportTable();
         createToggleButton();
     });
@@ -455,14 +323,6 @@
                         conversionsCell.style.cssText = `
                             text-align: center !important;
                         `;
-                        
-                        // Check for kill streak announcement
-                        if (totalConversions > previousConversions && totalConversions > 0) {
-                            console.log('Kill streak detected!', previousConversions, '->', totalConversions);
-                            showKillStreakAnnouncement(totalConversions, username);
-                            localStorage.setItem('previousConversions', totalConversions.toString());
-                            previousConversions = totalConversions;
-                        }
                     }
                 }
             } else {
@@ -533,9 +393,9 @@
     // ===== EVOLUTIONARY SNAKE SYSTEM =====
     function getBadgeStyle(stage, conversions) {
         let badgeHTML = '';
-        
+
         switch(stage) {
-            case 'basic':
+            case 'baby':
                 // Simple badge - basic style
                 badgeHTML = `
                     <div style="
@@ -553,35 +413,7 @@
                     ">${conversions}</div>
                 `;
                 break;
-                
-            case 'evolved':
-                // Pulsing blue badge with glow
-                badgeHTML = `
-                    <div style="
-                        position: relative;
-                        background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
-                        color: white;
-                        font-size: 32px;
-                        font-weight: bold;
-                        padding: 10px 24px;
-                        border-radius: 50px;
-                        margin: 0 20px;
-                        box-shadow: 0 0 20px rgba(30, 136, 229, 0.8), 0 0 40px rgba(30, 136, 229, 0.4);
-                        font-family: 'Arial Black', sans-serif;
-                        min-width: 70px;
-                        text-align: center;
-                        animation: pulseBadge 1.5s ease-in-out infinite;
-                        border: 2px solid #00ffff;
-                    ">${conversions}</div>
-                    <style>
-                        @keyframes pulseBadge {
-                            0%, 100% { transform: scale(1); }
-                            50% { transform: scale(1.05); }
-                        }
-                    </style>
-                `;
-                break;
-                
+
             case 'venomous':
                 // Purple badge with dripping effect and particles
                 badgeHTML = `
@@ -620,7 +452,35 @@
                     </style>
                 `;
                 break;
-                
+
+            case 'evolved':
+                // Pulsing blue badge with glow
+                badgeHTML = `
+                    <div style="
+                        position: relative;
+                        background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
+                        color: white;
+                        font-size: 32px;
+                        font-weight: bold;
+                        padding: 10px 24px;
+                        border-radius: 50px;
+                        margin: 0 20px;
+                        box-shadow: 0 0 20px rgba(30, 136, 229, 0.8), 0 0 40px rgba(30, 136, 229, 0.4);
+                        font-family: 'Arial Black', sans-serif;
+                        min-width: 70px;
+                        text-align: center;
+                        animation: pulseBadge 1.5s ease-in-out infinite;
+                        border: 2px solid #00ffff;
+                    ">${conversions}</div>
+                    <style>
+                        @keyframes pulseBadge {
+                            0%, 100% { transform: scale(1); }
+                            50% { transform: scale(1.05); }
+                        }
+                    </style>
+                `;
+                break;
+
             case 'demonic':
                 // Hellfire badge with flames and intense glow
                 badgeHTML = `
@@ -678,7 +538,7 @@
                     </style>
                 `;
                 break;
-                
+
             case 'divine':
                 // Divine golden badge with holy aura and sparkles
                 badgeHTML = `
@@ -686,7 +546,7 @@
                         <!-- Holy aura rings -->
                         <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 140px; height: 140px; border-radius: 50%; border: 3px solid rgba(255, 215, 0, 0.4); animation: holyRing1 2s ease-in-out infinite;"></div>
                         <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255, 255, 0, 0.6); animation: holyRing2 1.5s ease-in-out infinite;"></div>
-                        
+
                         <!-- Main badge -->
                         <div style="
                             background: linear-gradient(135deg, #ffd700 0%, #ffed4e 50%, #ffd700 100%);
@@ -705,7 +565,7 @@
                             position: relative;
                             z-index: 2;
                         ">${conversions}</div>
-                        
+
                         <!-- Sparkle particles -->
                         <div style="position: absolute; top: 10%; left: 10%; width: 6px; height: 6px; background: #ffff00; animation: sparkle1 1.5s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
                         <div style="position: absolute; top: 20%; right: 15%; width: 8px; height: 8px; background: #ffff00; animation: sparkle2 1.8s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
@@ -713,7 +573,7 @@
                         <div style="position: absolute; bottom: 20%; right: 10%; width: 6px; height: 6px; background: #ffd700; animation: sparkle4 1.6s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
                         <div style="position: absolute; top: 50%; left: 5%; width: 5px; height: 5px; background: #ffff00; animation: sparkle5 2.2s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
                         <div style="position: absolute; top: 50%; right: 5%; width: 5px; height: 5px; background: #ffffff; animation: sparkle6 1.9s ease-in-out infinite; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);"></div>
-                        
+
                         <!-- Light rays -->
                         <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay1 3s linear infinite; transform-origin: center;"></div>
                         <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(45deg); width: 2px; height: 80px; background: linear-gradient(to bottom, rgba(255, 255, 0, 0), rgba(255, 255, 0, 0.6), rgba(255, 255, 0, 0)); animation: lightRay2 3s linear infinite; transform-origin: center;"></div>
@@ -776,18 +636,316 @@
                     </style>
                 `;
                 break;
+
+            case 'shenron':
+                // Shenron-style badge with green dragon energy
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 25px;">
+                        <!-- Dragon aura -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 160px; height: 160px; border-radius: 50%; border: 3px solid rgba(0, 255, 0, 0.5); animation: dragonAura1 2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(50, 255, 50, 0.7); animation: dragonAura2 1.5s ease-in-out infinite;"></div>
+
+                        <!-- Main badge -->
+                        <div style="
+                            background: linear-gradient(135deg, #00ff00 0%, #00cc00 50%, #00ff00 100%);
+                            color: #003300;
+                            font-size: 48px;
+                            font-weight: bold;
+                            padding: 18px 40px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 50px rgba(0, 255, 0, 1), 0 0 100px rgba(0, 255, 0, 0.8), inset 0 0 35px rgba(255, 255, 255, 0.4);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 110px;
+                            text-align: center;
+                            animation: shenronPulse 1s ease-in-out infinite;
+                            border: 4px solid #00ff00;
+                            text-shadow: 0 0 15px #ffffff, 0 0 25px #00ff00, 0 3px 5px rgba(0,0,0,0.4);
+                            position: relative;
+                            z-index: 2;
+                        ">${conversions}</div>
+
+                        <!-- Energy particles -->
+                        <div style="position: absolute; top: 15%; left: 12%; width: 8px; height: 8px; background: #00ff00; border-radius: 50%; animation: energyFloat1 2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 25%; right: 18%; width: 6px; height: 6px; background: #66ff66; border-radius: 50%; animation: energyFloat2 2.3s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 18%; left: 18%; width: 7px; height: 7px; background: #00ff00; border-radius: 50%; animation: energyFloat3 2.1s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 25%; right: 12%; width: 8px; height: 8px; background: #33ff33; border-radius: 50%; animation: energyFloat4 1.9s ease-in-out infinite;"></div>
+                    </div>
+                    <style>
+                        @keyframes shenronPulse {
+                            0%, 100% { transform: scale(1); filter: brightness(1) drop-shadow(0 0 20px #00ff00); }
+                            50% { transform: scale(1.08); filter: brightness(1.4) drop-shadow(0 0 40px #00ff00); }
+                        }
+                        @keyframes dragonAura1 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.5; }
+                            50% { transform: translate(-50%, -50%) scale(1.15) rotate(180deg); opacity: 0.9; }
+                        }
+                        @keyframes dragonAura2 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.7; }
+                            50% { transform: translate(-50%, -50%) scale(1.2) rotate(-180deg); opacity: 1; }
+                        }
+                        @keyframes energyFloat1 {
+                            0%, 100% { transform: translateY(0) scale(1); opacity: 0.7; }
+                            50% { transform: translateY(-15px) scale(1.5); opacity: 1; }
+                        }
+                        @keyframes energyFloat2 {
+                            0%, 100% { transform: translateY(0) scale(1); opacity: 0.6; }
+                            50% { transform: translateY(-18px) scale(1.6); opacity: 1; }
+                        }
+                        @keyframes energyFloat3 {
+                            0%, 100% { transform: translateY(0) scale(1); opacity: 0.8; }
+                            50% { transform: translateY(-12px) scale(1.4); opacity: 1; }
+                        }
+                        @keyframes energyFloat4 {
+                            0%, 100% { transform: translateY(0) scale(1); opacity: 0.7; }
+                            50% { transform: translateY(-16px) scale(1.7); opacity: 1; }
+                        }
+                    </style>
+                `;
+                break;
+
+            case 'blueEyes':
+                // Blue-Eyes White Dragon style badge
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 25px;">
+                        <!-- Lightning aura -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 170px; height: 170px; border-radius: 50%; border: 3px solid rgba(0, 100, 255, 0.6); animation: lightningAura1 1.8s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 150px; height: 150px; border-radius: 50%; border: 2px solid rgba(100, 150, 255, 0.8); animation: lightningAura2 1.3s ease-in-out infinite;"></div>
+
+                        <!-- Main badge -->
+                        <div style="
+                            background: linear-gradient(135deg, #e6f2ff 0%, #99ccff 50%, #e6f2ff 100%);
+                            color: #003366;
+                            font-size: 50px;
+                            font-weight: bold;
+                            padding: 20px 44px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 60px rgba(0, 100, 255, 1), 0 0 120px rgba(100, 150, 255, 0.9), inset 0 0 40px rgba(255, 255, 255, 0.6);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 120px;
+                            text-align: center;
+                            animation: blueEyesPulse 0.9s ease-in-out infinite;
+                            border: 5px solid #0066ff;
+                            text-shadow: 0 0 20px #ffffff, 0 0 30px #0066ff, 0 4px 6px rgba(0,0,0,0.3);
+                            position: relative;
+                            z-index: 2;
+                        ">${conversions}</div>
+
+                        <!-- Lightning bolts -->
+                        <div style="position: absolute; top: 10%; left: 8%; width: 3px; height: 25px; background: linear-gradient(to bottom, #ffffff, #0066ff); animation: lightning1 1.5s ease-in-out infinite; clip-path: polygon(50% 0%, 0% 40%, 50% 40%, 0% 100%, 100% 60%, 50% 60%);"></div>
+                        <div style="position: absolute; top: 15%; right: 10%; width: 3px; height: 20px; background: linear-gradient(to bottom, #ffffff, #0066ff); animation: lightning2 1.7s ease-in-out infinite; clip-path: polygon(50% 0%, 0% 40%, 50% 40%, 0% 100%, 100% 60%, 50% 60%);"></div>
+                        <div style="position: absolute; bottom: 12%; left: 12%; width: 3px; height: 22px; background: linear-gradient(to bottom, #0066ff, #ffffff); animation: lightning3 1.6s ease-in-out infinite; clip-path: polygon(50% 0%, 0% 40%, 50% 40%, 0% 100%, 100% 60%, 50% 60%);"></div>
+                        <div style="position: absolute; bottom: 18%; right: 8%; width: 3px; height: 24px; background: linear-gradient(to bottom, #0066ff, #ffffff); animation: lightning4 1.4s ease-in-out infinite; clip-path: polygon(50% 0%, 0% 40%, 50% 40%, 0% 100%, 100% 60%, 50% 60%);"></div>
+
+                        <!-- Electric particles -->
+                        <div style="position: absolute; top: 30%; left: 5%; width: 4px; height: 4px; background: #00ccff; border-radius: 50%; animation: electric1 1.2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 40%; right: 7%; width: 5px; height: 5px; background: #0099ff; border-radius: 50%; animation: electric2 1.4s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 35%; left: 8%; width: 4px; height: 4px; background: #00ccff; border-radius: 50%; animation: electric3 1.3s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 45%; right: 6%; width: 5px; height: 5px; background: #0099ff; border-radius: 50%; animation: electric4 1.5s ease-in-out infinite;"></div>
+                    </div>
+                    <style>
+                        @keyframes blueEyesPulse {
+                            0%, 100% { transform: scale(1); filter: brightness(1.1) drop-shadow(0 0 25px #0066ff); }
+                            50% { transform: scale(1.1); filter: brightness(1.5) drop-shadow(0 0 50px #0066ff); }
+                        }
+                        @keyframes lightningAura1 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.6; }
+                            50% { transform: translate(-50%, -50%) scale(1.12) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes lightningAura2 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.8; }
+                            50% { transform: translate(-50%, -50%) scale(1.18) rotate(-180deg); opacity: 1; }
+                        }
+                        @keyframes lightning1 {
+                            0%, 100% { opacity: 0; transform: translateY(0) scaleY(0); }
+                            20% { opacity: 1; transform: translateY(-5px) scaleY(1.2); }
+                            40% { opacity: 0; transform: translateY(-10px) scaleY(0.8); }
+                        }
+                        @keyframes lightning2 {
+                            0%, 100% { opacity: 0; transform: translateY(0) scaleY(0); }
+                            25% { opacity: 1; transform: translateY(-6px) scaleY(1.3); }
+                            50% { opacity: 0; transform: translateY(-12px) scaleY(0.7); }
+                        }
+                        @keyframes lightning3 {
+                            0%, 100% { opacity: 0; transform: translateY(0) scaleY(0); }
+                            30% { opacity: 1; transform: translateY(5px) scaleY(1.1); }
+                            60% { opacity: 0; transform: translateY(10px) scaleY(0.9); }
+                        }
+                        @keyframes lightning4 {
+                            0%, 100% { opacity: 0; transform: translateY(0) scaleY(0); }
+                            35% { opacity: 1; transform: translateY(6px) scaleY(1.4); }
+                            70% { opacity: 0; transform: translateY(12px) scaleY(0.6); }
+                        }
+                        @keyframes electric1 {
+                            0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+                            50% { transform: translate(-8px, -8px) scale(1.8); opacity: 1; }
+                        }
+                        @keyframes electric2 {
+                            0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.7; }
+                            50% { transform: translate(10px, -10px) scale(2); opacity: 1; }
+                        }
+                        @keyframes electric3 {
+                            0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+                            50% { transform: translate(-9px, 9px) scale(1.7); opacity: 1; }
+                        }
+                        @keyframes electric4 {
+                            0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.7; }
+                            50% { transform: translate(11px, 11px) scale(1.9); opacity: 1; }
+                        }
+                    </style>
+                `;
+                break;
+
+            case 'galaxy':
+                // Galaxy Dragon badge with cosmic theme
+                badgeHTML = `
+                    <div style="position: relative; margin: 0 30px;">
+                        <!-- Cosmic rings -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 190px; height: 190px; border-radius: 50%; border: 4px solid rgba(138, 43, 226, 0.5); animation: cosmicRing1 2.5s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 170px; height: 170px; border-radius: 50%; border: 3px solid rgba(75, 0, 130, 0.7); animation: cosmicRing2 2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 150px; height: 150px; border-radius: 50%; border: 2px solid rgba(148, 0, 211, 0.6); animation: cosmicRing3 1.7s ease-in-out infinite;"></div>
+
+                        <!-- Main badge -->
+                        <div style="
+                            background: linear-gradient(135deg, #1a0033 0%, #330066 25%, #6600cc 50%, #330066 75%, #1a0033 100%);
+                            color: #ffffff;
+                            font-size: 52px;
+                            font-weight: bold;
+                            padding: 22px 48px;
+                            border-radius: 50px;
+                            box-shadow: 0 0 70px rgba(138, 43, 226, 1), 0 0 140px rgba(138, 43, 226, 0.8), inset 0 0 50px rgba(148, 0, 211, 0.4);
+                            font-family: 'Arial Black', sans-serif;
+                            min-width: 130px;
+                            text-align: center;
+                            animation: galaxyPulse 1.5s ease-in-out infinite;
+                            border: 5px solid #8a2be2;
+                            text-shadow: 0 0 25px #ffffff, 0 0 40px #8a2be2, 0 0 60px #9400d3, 0 5px 8px rgba(0,0,0,0.5);
+                            position: relative;
+                            z-index: 2;
+                        ">${conversions}</div>
+
+                        <!-- Stars -->
+                        <div style="position: absolute; top: 8%; left: 5%; width: 3px; height: 3px; background: #ffffff; border-radius: 50%; animation: star1 2s ease-in-out infinite; box-shadow: 0 0 6px #ffffff;"></div>
+                        <div style="position: absolute; top: 15%; right: 8%; width: 4px; height: 4px; background: #ffff00; border-radius: 50%; animation: star2 2.3s ease-in-out infinite; box-shadow: 0 0 8px #ffff00;"></div>
+                        <div style="position: absolute; top: 25%; left: 12%; width: 2px; height: 2px; background: #ffffff; border-radius: 50%; animation: star3 1.8s ease-in-out infinite; box-shadow: 0 0 5px #ffffff;"></div>
+                        <div style="position: absolute; top: 35%; right: 5%; width: 3px; height: 3px; background: #ffff00; border-radius: 50%; animation: star4 2.1s ease-in-out infinite; box-shadow: 0 0 7px #ffff00;"></div>
+                        <div style="position: absolute; bottom: 8%; left: 8%; width: 4px; height: 4px; background: #ffffff; border-radius: 50%; animation: star5 2.2s ease-in-out infinite; box-shadow: 0 0 8px #ffffff;"></div>
+                        <div style="position: absolute; bottom: 18%; right: 12%; width: 3px; height: 3px; background: #ffff00; border-radius: 50%; animation: star6 1.9s ease-in-out infinite; box-shadow: 0 0 6px #ffff00;"></div>
+                        <div style="position: absolute; bottom: 28%; left: 6%; width: 2px; height: 2px; background: #ffffff; border-radius: 50%; animation: star7 2.4s ease-in-out infinite; box-shadow: 0 0 5px #ffffff;"></div>
+                        <div style="position: absolute; bottom: 38%; right: 7%; width: 4px; height: 4px; background: #ffff00; border-radius: 50%; animation: star8 2s ease-in-out infinite; box-shadow: 0 0 8px #ffff00;"></div>
+
+                        <!-- Nebula particles -->
+                        <div style="position: absolute; top: 20%; left: 15%; width: 10px; height: 10px; background: radial-gradient(circle, rgba(138, 43, 226, 0.8), transparent); border-radius: 50%; animation: nebula1 3s ease-in-out infinite;"></div>
+                        <div style="position: absolute; top: 30%; right: 18%; width: 12px; height: 12px; background: radial-gradient(circle, rgba(148, 0, 211, 0.7), transparent); border-radius: 50%; animation: nebula2 3.5s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 25%; left: 20%; width: 11px; height: 11px; background: radial-gradient(circle, rgba(138, 43, 226, 0.75), transparent); border-radius: 50%; animation: nebula3 3.2s ease-in-out infinite;"></div>
+                        <div style="position: absolute; bottom: 35%; right: 15%; width: 13px; height: 13px; background: radial-gradient(circle, rgba(148, 0, 211, 0.8), transparent); border-radius: 50%; animation: nebula4 3.8s ease-in-out infinite;"></div>
+
+                        <!-- Cosmic dust trail -->
+                        <div style="position: absolute; top: 50%; left: -20%; width: 40px; height: 2px; background: linear-gradient(to right, transparent, rgba(138, 43, 226, 0.6), transparent); animation: dustTrail 4s linear infinite;"></div>
+                        <div style="position: absolute; top: 50%; right: -20%; width: 40px; height: 2px; background: linear-gradient(to left, transparent, rgba(148, 0, 211, 0.6), transparent); animation: dustTrailReverse 4s linear infinite;"></div>
+                    </div>
+                    <style>
+                        @keyframes galaxyPulse {
+                            0%, 100% {
+                                transform: scale(1) rotate(0deg);
+                                filter: brightness(1.2) drop-shadow(0 0 30px #8a2be2) hue-rotate(0deg);
+                            }
+                            50% {
+                                transform: scale(1.12) rotate(2deg);
+                                filter: brightness(1.6) drop-shadow(0 0 60px #8a2be2) hue-rotate(10deg);
+                            }
+                        }
+                        @keyframes cosmicRing1 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.5; }
+                            50% { transform: translate(-50%, -50%) scale(1.15) rotate(180deg); opacity: 1; }
+                        }
+                        @keyframes cosmicRing2 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.7; }
+                            50% { transform: translate(-50%, -50%) scale(1.2) rotate(-180deg); opacity: 1; }
+                        }
+                        @keyframes cosmicRing3 {
+                            0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.6; }
+                            50% { transform: translate(-50%, -50%) scale(1.18) rotate(180deg); opacity: 0.95; }
+                        }
+                        @keyframes star1 {
+                            0%, 100% { transform: scale(1); opacity: 0.4; }
+                            50% { transform: scale(2); opacity: 1; }
+                        }
+                        @keyframes star2 {
+                            0%, 100% { transform: scale(1); opacity: 0.5; }
+                            50% { transform: scale(2.2); opacity: 1; }
+                        }
+                        @keyframes star3 {
+                            0%, 100% { transform: scale(1); opacity: 0.3; }
+                            50% { transform: scale(1.8); opacity: 1; }
+                        }
+                        @keyframes star4 {
+                            0%, 100% { transform: scale(1); opacity: 0.45; }
+                            50% { transform: scale(2.1); opacity: 1; }
+                        }
+                        @keyframes star5 {
+                            0%, 100% { transform: scale(1); opacity: 0.5; }
+                            50% { transform: scale(2.3); opacity: 1; }
+                        }
+                        @keyframes star6 {
+                            0%, 100% { transform: scale(1); opacity: 0.4; }
+                            50% { transform: scale(2); opacity: 1; }
+                        }
+                        @keyframes star7 {
+                            0%, 100% { transform: scale(1); opacity: 0.35; }
+                            50% { transform: scale(1.9); opacity: 1; }
+                        }
+                        @keyframes star8 {
+                            0%, 100% { transform: scale(1); opacity: 0.5; }
+                            50% { transform: scale(2.4); opacity: 1; }
+                        }
+                        @keyframes nebula1 {
+                            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.3; }
+                            50% { transform: scale(1.5) rotate(180deg); opacity: 0.8; }
+                        }
+                        @keyframes nebula2 {
+                            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.35; }
+                            50% { transform: scale(1.6) rotate(-180deg); opacity: 0.7; }
+                        }
+                        @keyframes nebula3 {
+                            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.32; }
+                            50% { transform: scale(1.55) rotate(180deg); opacity: 0.75; }
+                        }
+                        @keyframes nebula4 {
+                            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.38; }
+                            50% { transform: scale(1.65) rotate(-180deg); opacity: 0.8; }
+                        }
+                        @keyframes dustTrail {
+                            0% { transform: translateX(0); opacity: 0; }
+                            50% { opacity: 1; }
+                            100% { transform: translateX(calc(100% + 40px)); opacity: 0; }
+                        }
+                        @keyframes dustTrailReverse {
+                            0% { transform: translateX(0); opacity: 0; }
+                            50% { opacity: 1; }
+                            100% { transform: translateX(calc(-100% - 40px)); opacity: 0; }
+                        }
+                    </style>
+                `;
+                break;
         }
-        
+
         return badgeHTML;
     }
 
     function getSnakeEvolution(conversions) {
-        if (conversions === 0 || conversions === 1) {
+        if (conversions === 0) {
             return {
-                stage: 'basic',
+                stage: 'baby',
                 name: 'Baby Snake',
                 size: 120,
                 height: 60
+            };
+        } else if (conversions === 1) {
+            return {
+                stage: 'venomous',
+                name: 'Viper',
+                size: 180,
+                height: 90
             };
         } else if (conversions === 2) {
             return {
@@ -798,24 +956,38 @@
             };
         } else if (conversions === 3) {
             return {
-                stage: 'venomous',
-                name: 'Viper',
-                size: 180,
-                height: 90
-            };
-        } else if (conversions === 4) {
-            return {
                 stage: 'demonic',
                 name: 'Demon Snake',
                 size: 210,
                 height: 105
             };
-        } else {
+        } else if (conversions === 4) {
             return {
                 stage: 'divine',
                 name: 'Divine Serpent',
                 size: 250,
                 height: 125
+            };
+        } else if (conversions === 5) {
+            return {
+                stage: 'shenron',
+                name: 'Shenron Dragon',
+                size: 280,
+                height: 140
+            };
+        } else if (conversions === 6) {
+            return {
+                stage: 'blueEyes',
+                name: 'Blue-Eyes White Dragon',
+                size: 300,
+                height: 150
+            };
+        } else {
+            return {
+                stage: 'galaxy',
+                name: 'Galaxy Dragon',
+                size: 320,
+                height: 160
             };
         }
     }
@@ -831,16 +1003,25 @@
         snakeCell.colSpan = colCount;
 
         const cellHeight = evolution.height + 40;
-        
+
         let bgGradient = 'linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%)';
         let borderColor = '#667eea';
-        
+
         if (evolution.stage === 'divine') {
             bgGradient = 'linear-gradient(135deg, #fff9e6 0%, #ffe9b3 50%, #fff9e6 100%)';
             borderColor = '#ffd700';
         } else if (evolution.stage === 'demonic') {
             bgGradient = 'linear-gradient(135deg, #1a0000 0%, #330000 50%, #1a0000 100%)';
             borderColor = '#ff0000';
+        } else if (evolution.stage === 'shenron') {
+            bgGradient = 'linear-gradient(135deg, #001a00 0%, #003300 50%, #001a00 100%)';
+            borderColor = '#00ff00';
+        } else if (evolution.stage === 'blueEyes') {
+            bgGradient = 'linear-gradient(135deg, #e6f2ff 0%, #cce6ff 50%, #e6f2ff 100%)';
+            borderColor = '#0066ff';
+        } else if (evolution.stage === 'galaxy') {
+            bgGradient = 'linear-gradient(135deg, #0a0015 0%, #1a0033 25%, #2d0052 50%, #1a0033 75%, #0a0015 100%)';
+            borderColor = '#8a2be2';
         }
 
         snakeCell.style.cssText = `
@@ -856,9 +1037,13 @@
         const snakeSVG = getSnakeSVG(evolution);
         const badgeStyle = getBadgeStyle(evolution.stage, conversions);
 
+        let textColor = evolution.stage === 'divine' ? '#8B4513' : '#fff';
+        if (evolution.stage === 'blueEyes') textColor = '#003366';
+        if (evolution.stage === 'galaxy') textColor = '#ffffff';
+
         snakeCell.innerHTML = `
             <div id="snakeContainer" style="position: relative; height: ${cellHeight}px; width: 100%; overflow: hidden;">
-                <div style="position: absolute; top: 10px; left: 20px; color: ${evolution.stage === 'divine' ? '#8B4513' : '#fff'}; font-size: 14px; font-weight: bold; z-index: 5;">
+                <div style="position: absolute; top: 10px; left: 20px; color: ${textColor}; font-size: 14px; font-weight: bold; z-index: 5;">
                     Evolution: ${evolution.name}
                 </div>
                 <div id="snakeWrapper" style="position: absolute; left: ${savedPosition}%; top: 50%; transform: translateY(-50%); display: flex; align-items: center; white-space: nowrap;">
@@ -884,22 +1069,28 @@
         const height = evolution.height;
 
         switch(evolution.stage) {
-            case 'basic':
+            case 'baby':
                 return getBasicSnake(size, height);
-            case 'evolved':
-                return getEvolvedSnake(size, height);
             case 'venomous':
                 return getVenomousSnake(size, height);
+            case 'evolved':
+                return getEvolvedSnake(size, height);
             case 'demonic':
                 return getDemonicSnake(size, height);
             case 'divine':
                 return getDivineSnake(size, height);
+            case 'shenron':
+                return getShenronDragon(size, height);
+            case 'blueEyes':
+                return getBlueEyesDragon(size, height);
+            case 'galaxy':
+                return getGalaxyDragon(size, height);
             default:
                 return getBasicSnake(size, height);
         }
     }
 
-    // Stage 1: Basic Snake (0-1 conversions)
+    // Stage 0: Baby Snake (0 conversions)
     function getBasicSnake(w, h) {
         return `
             <svg width="${w}" height="${h}" viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));">
@@ -1048,7 +1239,7 @@
         `;
     }
 
-    // Stage 3: Venomous Viper (3 conversions) - Purple with deadly fangs
+    // Stage 1: Venomous Viper (1 conversion) - Purple with deadly fangs
     function getVenomousSnake(w, h) {
         return `
             <svg width="${w}" height="${h}" viewBox="0 0 180 90" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 8px 16px rgba(128,0,128,0.5));">
@@ -1151,7 +1342,7 @@
         `;
     }
 
-    // Stage 4: Demonic Snake (4 conversions) - Red/Black with horns
+    // Stage 3: Demonic Snake (3 conversions) - Red/Black with horns
     function getDemonicSnake(w, h) {
         return `
             <svg width="${w}" height="${h}" viewBox="0 0 210 105" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 10px 20px rgba(255,0,0,0.6));">
@@ -1286,7 +1477,7 @@
         `;
     }
 
-    // Stage 5: Divine/Saint Snake (5+ conversions) - Golden with angel wings
+    // Stage 4: Divine/Saint Snake (4 conversions) - Golden with angel wings
     function getDivineSnake(w, h) {
         return `
             <svg width="${w}" height="${h}" viewBox="0 0 250 125" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 12px 24px rgba(255,215,0,0.6));">
@@ -1467,88 +1658,695 @@
                     <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.2s"/>
                 </circle>
                 <circle cx="173" cy="56" r="4" fill="#ffffff" opacity="0.95">
+                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.2s"/>
+		<circle cx="178" cy="66" r="4" fill="#ffffff" opacity="0.95">
                     <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.5s"/>
-                </circle>
-                <circle cx="178" cy="66" r="4" fill="#ffffff" opacity="0.95">
-                    <animate attributeName="opacity" values="0.95;0.7;0.95" dur="1.5s" repeatCount="indefinite" begin="0.8s"/>
                 </circle>
             </svg>
         `;
     }
 
+// Stage 5: Shenron Dragon (5 conversions) - Green Dragon Ball Z style
+function getShenronDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 280 140" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 15px 30px rgba(0,255,0,0.7));">
+            <defs>
+                <linearGradient id="shenronBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00cc00;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#00ff00;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00cc00;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="shenronEye">
+                    <stop offset="0%" style="stop-color:#ff0000;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#cc0000;stop-opacity:1" />
+                </radialGradient>
+                <filter id="shenronGlow">
+                    <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+
+            <!-- Dragon body segments -->
+            <ellipse cx="25" cy="70" rx="18" ry="25" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="58" cy="70" rx="22" ry="30" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="0.2s"/>
+            </ellipse>
+            <ellipse cx="98" cy="70" rx="25" ry="33" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="0.4s"/>
+            </ellipse>
+            <ellipse cx="140" cy="70" rx="28" ry="36" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="182" cy="70" rx="26" ry="34" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+            </ellipse>
+            <ellipse cx="220" cy="70" rx="30" ry="38" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+
+            <!-- Dragon head -->
+            <ellipse cx="250" cy="70" rx="35" ry="45" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2.5" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Horns -->
+            <path d="M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z" fill="#ffcc00" stroke="#cc9900" stroke-width="1.5" filter="url(#shenronGlow)">
+                <animate attributeName="d" values="M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z; M 240 40 Q 236 23 245 12 Q 243 30 245 40 Z; M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z" dur="2s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z" fill="#ffcc00" stroke="#cc9900" stroke-width="1.5" filter="url(#shenronGlow)">
+                <animate attributeName="d" values="M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z; M 240 100 Q 236 117 245 128 Q 243 110 245 100 Z; M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </path>
+
+            <!-- Eyes - Shenron red eyes -->
+            <ellipse cx="245" cy="60" rx="8" ry="10" fill="url(#shenronEye)" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="60;57;60" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="245" cy="80" rx="8" ry="10" fill="url(#shenronEye)" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="247" cy="60" rx="3" ry="4" fill="#000">
+                <animate attributeName="cy" values="60;57;60" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="247" cy="80" rx="3" ry="4" fill="#000">
+                <animate attributeName="cy" values="80;77;80" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Whiskers -->
+            <path d="M 250 65 L 270 60 M 250 75 L 270 80" stroke="#ffff00" stroke-width="2.5" fill="none" filter="url(#shenronGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 250 65 L 270 60 M 250 75 L 270 80; M 250 65 L 265 60 M 250 75 L 265 80; M 250 65 L 270 60 M 250 75 L 270 80" dur="1s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Dragon scales -->
+            <circle cx="70" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="75" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="110" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="115" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="152" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="157" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="194" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="199" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+        </svg>
+    `;
+}
+
+// Stage 6: Blue-Eyes White Dragon (6 conversions)
+function getBlueEyesDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 18px 35px rgba(0,100,255,0.8));">
+            <defs>
+                <linearGradient id="blueEyesBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#e6f2ff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#cce6ff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#e6f2ff;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="blueEyesEye">
+                    <stop offset="0%" style="stop-color:#00ccff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#0099ff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#0066ff;stop-opacity:1" />
+                </radialGradient>
+                <filter id="blueEyesGlow">
+                    <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+
+            <!-- Lightning aura background -->
+            <circle cx="240" cy="75" r="60" fill="#0066ff" opacity="0.15" filter="url(#blueEyesGlow)">
+                <animate attributeName="r" values="60;70;60" dur="1.5s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Dragon body segments - White/Blue -->
+            <ellipse cx="28" cy="75" rx="20" ry="28" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="65" cy="75" rx="24" ry="32" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="0.2s"/>
+            </ellipse>
+            <ellipse cx="108" cy="75" rx="28" ry="36" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="0.4s"/>
+            </ellipse>
+            <ellipse cx="154" cy="75" rx="30" ry="39" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="200" cy="75" rx="28" ry="37" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+            </ellipse>
+            <ellipse cx="242" cy="75" rx="32" ry="42" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+
+            <!-- Dragon head -->
+            <ellipse cx="275" cy="75" rx="38" ry="50" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="3" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Dragon horns - crystalline -->
+            <path d="M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z" fill="#99ccff" stroke="#0066ff" stroke-width="2" filter="url(#blueEyesGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z; M 265 35 Q 260 15 270 2 Q 268 22 270 35 Z; M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z" dur="2s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z" fill="#99ccff" stroke="#0066ff" stroke-width="2" filter="url(#blueEyesGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z; M 265 115 Q 260 135 270 148 Q 268 128 270 115 Z; M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </path>
+
+            <!-- Blue Eyes - Glowing -->
+            <ellipse cx="270" cy="62" rx="10" ry="12" fill="url(#blueEyesEye)" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="62;59;62" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+                <animate attributeName="rx" values="10;11;10" dur="2s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="270" cy="88" rx="10" ry="12" fill="url(#blueEyesEye)" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="88;85;88" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+                <animate attributeName="rx" values="10;11;10" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+            <ellipse cx="272" cy="62" rx="4" ry="5" fill="#ffffff">
+                <animate attributeName="cy" values="62;59;62" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="272" cy="88" rx="4" ry="5" fill="#ffffff">
+                <animate attributeName="cy" values="88;85;88" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Lightning breath -->
+            <path d="M 275 70 L 295 65 M 275 80 L 295 85" stroke="#00ccff" stroke-width="3.5" fill="none" filter="url(#blueEyesGlow)">
+                <animate attributeName="d" values="M 275 70 L 295 65 M 275 80 L 295 85; M 275 70 L 288 65 M 275 80 L 288 85; M 275 70 L 295 65 M 275 80 L 295 85" dur="0.4s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="1;0.6;1" dur="0.5s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Dragon scales - silvery blue -->
+            <circle cx="78" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="83" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="121" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="126" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="167" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="172" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="213" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="218" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+        </svg>
+    `;
+}
+
+// Stage 7+: Galaxy Dragon (7+ conversions)
+function getGalaxyDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 320 160" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 20px 40px rgba(138,43,226,0.9));">
+            <defs>
+                <linearGradient id="galaxyBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#1a0033;stop-opacity:1" />
+                    <stop offset="25%" style="stop-color:#330066;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#6600cc;stop-opacity:1" />
+                    <stop offset="75%" style="stop-color:#330066;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#1a0033;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="galaxyEye">
+                    <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                    <stop offset="30%" style="stop-color:#ff00ff;stop-opacity:1" />
+                    <stop offset="70%" style="stop-color:#8a2be2;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#4b0082;stop-opacity:1" />
+                </radialGradient>
+                <filter id="galaxyGlow">
+                    <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+                <radialGradient id="nebulaGrad">
+                    <stop offset="0%" style="stop-color:#9400d3;stop-opacity:0.8" />
+                    <stop offset="100%" style="stop-color:#4b0082;stop-opacity:0" />
+                </radialGradient>
+            </defs>
+
+            <!-- Cosmic nebula background -->
+            <circle cx="260" cy="80" r="70" fill="url(#nebulaGrad)" opacity="0.6" filter="url(#galaxyGlow)">
+                <animate attributeName="r" values="70;85;70" dur="3s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Dragon body segments - cosmic/galaxy theme -->
+            <ellipse cx="30" cy="80" rx="22" ry="30" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="70" cy="80" rx="26" ry="35" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.15s"/>
+            </ellipse>
+            <ellipse cx="117" cy="80" rx="30" ry="39" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.3s"/>
+            </ellipse>
+            <ellipse cx="167" cy="80" rx="33" ry="42" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.45s"/>
+            </ellipse>
+            <ellipse cx="217" cy="80" rx="30" ry="40" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="263" cy="80" rx="35" ry="45" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.75s"/>
+            </ellipse>
+
+            <!-- Dragon head - cosmic -->
+            <ellipse cx="300" cy="80" rx="42" ry="55" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3.5" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+
+            <!-- Cosmic horns -->
+            <path d="M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z" fill="#9400d3" stroke="#8a2be2" stroke-width="2" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z; M 288 28 Q 283 7 293 -3 Q 291 18 293 28 Z; M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z" dur="2.5s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z" fill="#9400d3" stroke="#8a2be2" stroke-width="2" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z; M 288 132 Q 283 153 293 163 Q 291 142 293 132 Z; M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z" dur="2.5s" repeatCount="indefinite" begin="1.2s"/>
+            </path>
+
+            <!-- Galaxy Eyes - swirling -->
+            <ellipse cx="295" cy="65" rx="12" ry="14" fill="url(#galaxyEye)" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="65;62;65" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+                <animate attributeName="rx" values="12;13.5;12" dur="2s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="295" cy="95" rx="12" ry="14" fill="url(#galaxyEye)" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="95;92;95" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+                <animate attributeName="rx" values="12;13.5;12" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+            <ellipse cx="298" cy="65" rx="5" ry="6" fill="#ffffff">
+                <animate attributeName="cy" values="65;62;65" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+            <ellipse cx="298" cy="95" rx="5" ry="6" fill="#ffffff">
+                <animate attributeName="cy" values="95;92;95" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+
+            <!-- Cosmic breath -->
+            <path d="M 300 75 L 318 70 M 300 85 L 318 90" stroke="#9400d3" stroke-width="4" fill="none" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 300 75 L 318 70 M 300 85 L 318 90; M 300 75 L 310 70 M 300 85 L 310 90; M 300 75 L 318 70 M 300 85 L 318 90" dur="0.4s" repeatCount="indefinite"/>
+                <animate attributeName="stroke" values="#9400d3;#8a2be2;#ff00ff;#9400d3" dur="1.5s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Stars on body -->
+            <circle cx="45" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="50" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.8s" repeatCount="indefinite" begin="0.3s"/>
+            </circle>
+            <circle cx="85" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.6s" repeatCount="indefinite" begin="0.6s"/>
+            </circle>
+            <circle cx="90" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.7s" repeatCount="indefinite" begin="0.9s"/>
+            </circle>
+            <circle cx="132" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.9s" repeatCount="indefinite" begin="1.2s"/>
+            </circle>
+            <circle cx="137" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.4s" repeatCount="indefinite" begin="0.2s"/>
+            </circle>
+            <circle cx="182" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="0.5s"/>
+            </circle>
+            <circle cx="187" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" repeatCount="indefinite" begin="0.8s"/>
+            </circle>
+            <circle cx="232" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.7s" repeatCount="indefinite" begin="1.1s"/>
+            </circle>
+            <circle cx="237" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.6s" repeatCount="indefinite" begin="0.4s"/>
+            </circle>
+
+            <!-- Galaxy scales - nebula-like -->
+            <circle cx="85" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="90" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="132" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="137" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="182" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="187" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="232" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="237" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+        </svg>
+    `;
+}
+EOF
+cat /home/claude/dragon-functions.js
+Output
+
+// Additional Dragon SVG Functions (append these to the main script)
+
+// Stage 5: Shenron Dragon (5 conversions) - Green Dragon Ball Z style
+function getShenronDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 280 140" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 15px 30px rgba(0,255,0,0.7));">
+            <defs>
+                <linearGradient id="shenronBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00cc00;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#00ff00;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00cc00;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="shenronEye">
+                    <stop offset="0%" style="stop-color:#ff0000;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#cc0000;stop-opacity:1" />
+                </radialGradient>
+                <filter id="shenronGlow">
+                    <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+
+            <!-- Dragon body segments -->
+            <ellipse cx="25" cy="70" rx="18" ry="25" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="58" cy="70" rx="22" ry="30" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="0.2s"/>
+            </ellipse>
+            <ellipse cx="98" cy="70" rx="25" ry="33" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="0.4s"/>
+            </ellipse>
+            <ellipse cx="140" cy="70" rx="28" ry="36" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="182" cy="70" rx="26" ry="34" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="0.8s"/>
+            </ellipse>
+            <ellipse cx="220" cy="70" rx="30" ry="38" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;73;70" dur="0.8s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+
+            <!-- Dragon head -->
+            <ellipse cx="250" cy="70" rx="35" ry="45" fill="url(#shenronBody)" stroke="#00aa00" stroke-width="2.5" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="70;67;70" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Horns -->
+            <path d="M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z" fill="#ffcc00" stroke="#cc9900" stroke-width="1.5" filter="url(#shenronGlow)">
+                <animate attributeName="d" values="M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z; M 240 40 Q 236 23 245 12 Q 243 30 245 40 Z; M 240 40 Q 238 25 245 15 Q 243 30 245 40 Z" dur="2s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z" fill="#ffcc00" stroke="#cc9900" stroke-width="1.5" filter="url(#shenronGlow)">
+                <animate attributeName="d" values="M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z; M 240 100 Q 236 117 245 128 Q 243 110 245 100 Z; M 240 100 Q 238 115 245 125 Q 243 110 245 100 Z" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </path>
+
+            <!-- Eyes - Shenron red eyes -->
+            <ellipse cx="245" cy="60" rx="8" ry="10" fill="url(#shenronEye)" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="60;57;60" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="245" cy="80" rx="8" ry="10" fill="url(#shenronEye)" filter="url(#shenronGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="247" cy="60" rx="3" ry="4" fill="#000">
+                <animate attributeName="cy" values="60;57;60" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="247" cy="80" rx="3" ry="4" fill="#000">
+                <animate attributeName="cy" values="80;77;80" dur="0.8s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Whiskers -->
+            <path d="M 250 65 L 270 60 M 250 75 L 270 80" stroke="#ffff00" stroke-width="2.5" fill="none" filter="url(#shenronGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 250 65 L 270 60 M 250 75 L 270 80; M 250 65 L 265 60 M 250 75 L 265 80; M 250 65 L 270 60 M 250 75 L 270 80" dur="1s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Dragon scales -->
+            <circle cx="70" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="75" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="110" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="115" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="152" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="157" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="194" cy="62" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+            <circle cx="199" cy="75" r="5" fill="#33ff33" opacity="0.8" filter="url(#shenronGlow)"/>
+        </svg>
+    `;
+}
+
+// Stage 6: Blue-Eyes White Dragon (6 conversions)
+function getBlueEyesDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 18px 35px rgba(0,100,255,0.8));">
+            <defs>
+                <linearGradient id="blueEyesBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#e6f2ff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#cce6ff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#e6f2ff;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="blueEyesEye">
+                    <stop offset="0%" style="stop-color:#00ccff;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#0099ff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#0066ff;stop-opacity:1" />
+                </radialGradient>
+                <filter id="blueEyesGlow">
+                    <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+
+            <!-- Lightning aura background -->
+            <circle cx="240" cy="75" r="60" fill="#0066ff" opacity="0.15" filter="url(#blueEyesGlow)">
+                <animate attributeName="r" values="60;70;60" dur="1.5s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Dragon body segments - White/Blue -->
+            <ellipse cx="28" cy="75" rx="20" ry="28" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="65" cy="75" rx="24" ry="32" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="0.2s"/>
+            </ellipse>
+            <ellipse cx="108" cy="75" rx="28" ry="36" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="0.4s"/>
+            </ellipse>
+            <ellipse cx="154" cy="75" rx="30" ry="39" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="200" cy="75" rx="28" ry="37" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="0.8s"/>
+            </ellipse>
+            <ellipse cx="242" cy="75" rx="32" ry="42" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="2.5" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;78;75" dur="0.7s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+
+            <!-- Dragon head -->
+            <ellipse cx="275" cy="75" rx="38" ry="50" fill="url(#blueEyesBody)" stroke="#0066ff" stroke-width="3" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="75;72;75" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Dragon horns - crystalline -->
+            <path d="M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z" fill="#99ccff" stroke="#0066ff" stroke-width="2" filter="url(#blueEyesGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z; M 265 35 Q 260 15 270 2 Q 268 22 270 35 Z; M 265 35 Q 262 18 270 5 Q 268 22 270 35 Z" dur="2s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z" fill="#99ccff" stroke="#0066ff" stroke-width="2" filter="url(#blueEyesGlow)" opacity="0.9">
+                <animate attributeName="d" values="M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z; M 265 115 Q 260 135 270 148 Q 268 128 270 115 Z; M 265 115 Q 262 132 270 145 Q 268 128 270 115 Z" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </path>
+
+            <!-- Blue Eyes - Glowing -->
+            <ellipse cx="270" cy="62" rx="10" ry="12" fill="url(#blueEyesEye)" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="62;59;62" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+                <animate attributeName="rx" values="10;11;10" dur="2s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="270" cy="88" rx="10" ry="12" fill="url(#blueEyesEye)" filter="url(#blueEyesGlow)">
+                <animate attributeName="cy" values="88;85;88" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+                <animate attributeName="rx" values="10;11;10" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+            <ellipse cx="272" cy="62" rx="4" ry="5" fill="#ffffff">
+                <animate attributeName="cy" values="62;59;62" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+            <ellipse cx="272" cy="88" rx="4" ry="5" fill="#ffffff">
+                <animate attributeName="cy" values="88;85;88" dur="0.7s" repeatCount="indefinite" begin="1.2s"/>
+            </ellipse>
+
+            <!-- Lightning breath -->
+            <path d="M 275 70 L 295 65 M 275 80 L 295 85" stroke="#00ccff" stroke-width="3.5" fill="none" filter="url(#blueEyesGlow)">
+                <animate attributeName="d" values="M 275 70 L 295 65 M 275 80 L 295 85; M 275 70 L 288 65 M 275 80 L 288 85; M 275 70 L 295 65 M 275 80 L 295 85" dur="0.4s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="1;0.6;1" dur="0.5s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Dragon scales - silvery blue -->
+            <circle cx="78" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="83" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="121" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="126" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="167" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="172" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="213" cy="67" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+            <circle cx="218" cy="80" r="5" fill="#b3d9ff" opacity="0.9" filter="url(#blueEyesGlow)"/>
+        </svg>
+    `;
+}
+
+// Stage 7+: Galaxy Dragon (7+ conversions)
+function getGalaxyDragon(w, h) {
+    return `
+        <svg width="${w}" height="${h}" viewBox="0 0 320 160" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 20px 40px rgba(138,43,226,0.9));">
+            <defs>
+                <linearGradient id="galaxyBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#1a0033;stop-opacity:1" />
+                    <stop offset="25%" style="stop-color:#330066;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#6600cc;stop-opacity:1" />
+                    <stop offset="75%" style="stop-color:#330066;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#1a0033;stop-opacity:1" />
+                </linearGradient>
+                <radialGradient id="galaxyEye">
+                    <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                    <stop offset="30%" style="stop-color:#ff00ff;stop-opacity:1" />
+                    <stop offset="70%" style="stop-color:#8a2be2;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#4b0082;stop-opacity:1" />
+                </radialGradient>
+                <filter id="galaxyGlow">
+                    <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+                <radialGradient id="nebulaGrad">
+                    <stop offset="0%" style="stop-color:#9400d3;stop-opacity:0.8" />
+                    <stop offset="100%" style="stop-color:#4b0082;stop-opacity:0" />
+                </radialGradient>
+            </defs>
+
+            <!-- Cosmic nebula background -->
+            <circle cx="260" cy="80" r="70" fill="url(#nebulaGrad)" opacity="0.6" filter="url(#galaxyGlow)">
+                <animate attributeName="r" values="70;85;70" dur="3s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Dragon body segments - cosmic/galaxy theme -->
+            <ellipse cx="30" cy="80" rx="22" ry="30" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="70" cy="80" rx="26" ry="35" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.15s"/>
+            </ellipse>
+            <ellipse cx="117" cy="80" rx="30" ry="39" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.3s"/>
+            </ellipse>
+            <ellipse cx="167" cy="80" rx="33" ry="42" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.45s"/>
+            </ellipse>
+            <ellipse cx="217" cy="80" rx="30" ry="40" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.6s"/>
+            </ellipse>
+            <ellipse cx="263" cy="80" rx="35" ry="45" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;83;80" dur="0.6s" repeatCount="indefinite" begin="0.75s"/>
+            </ellipse>
+
+            <!-- Dragon head - cosmic -->
+            <ellipse cx="300" cy="80" rx="42" ry="55" fill="url(#galaxyBody)" stroke="#8a2be2" stroke-width="3.5" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="80;77;80" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+
+            <!-- Cosmic horns -->
+            <path d="M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z" fill="#9400d3" stroke="#8a2be2" stroke-width="2" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z; M 288 28 Q 283 7 293 -3 Q 291 18 293 28 Z; M 288 28 Q 285 10 293 0 Q 291 18 293 28 Z" dur="2.5s" repeatCount="indefinite"/>
+            </path>
+            <path d="M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z" fill="#9400d3" stroke="#8a2be2" stroke-width="2" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z; M 288 132 Q 283 153 293 163 Q 291 142 293 132 Z; M 288 132 Q 285 150 293 160 Q 291 142 293 132 Z" dur="2.5s" repeatCount="indefinite" begin="1.2s"/>
+            </path>
+
+            <!-- Galaxy Eyes - swirling -->
+            <ellipse cx="295" cy="65" rx="12" ry="14" fill="url(#galaxyEye)" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="65;62;65" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+                <animate attributeName="rx" values="12;13.5;12" dur="2s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="295" cy="95" rx="12" ry="14" fill="url(#galaxyEye)" filter="url(#galaxyGlow)">
+                <animate attributeName="cy" values="95;92;95" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+                <animate attributeName="rx" values="12;13.5;12" dur="2s" repeatCount="indefinite" begin="1s"/>
+            </ellipse>
+            <ellipse cx="298" cy="65" rx="5" ry="6" fill="#ffffff">
+                <animate attributeName="cy" values="65;62;65" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+            <ellipse cx="298" cy="95" rx="5" ry="6" fill="#ffffff">
+                <animate attributeName="cy" values="95;92;95" dur="0.6s" repeatCount="indefinite" begin="0.9s"/>
+            </ellipse>
+
+            <!-- Cosmic breath -->
+            <path d="M 300 75 L 318 70 M 300 85 L 318 90" stroke="#9400d3" stroke-width="4" fill="none" filter="url(#galaxyGlow)">
+                <animate attributeName="d" values="M 300 75 L 318 70 M 300 85 L 318 90; M 300 75 L 310 70 M 300 85 L 310 90; M 300 75 L 318 70 M 300 85 L 318 90" dur="0.4s" repeatCount="indefinite"/>
+                <animate attributeName="stroke" values="#9400d3;#8a2be2;#ff00ff;#9400d3" dur="1.5s" repeatCount="indefinite"/>
+            </path>
+
+            <!-- Stars on body -->
+            <circle cx="45" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="50" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.8s" repeatCount="indefinite" begin="0.3s"/>
+            </circle>
+            <circle cx="85" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.6s" repeatCount="indefinite" begin="0.6s"/>
+            </circle>
+            <circle cx="90" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.7s" repeatCount="indefinite" begin="0.9s"/>
+            </circle>
+            <circle cx="132" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.9s" repeatCount="indefinite" begin="1.2s"/>
+            </circle>
+            <circle cx="137" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.4s" repeatCount="indefinite" begin="0.2s"/>
+            </circle>
+            <circle cx="182" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="0.5s"/>
+            </circle>
+            <circle cx="187" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" repeatCount="indefinite" begin="0.8s"/>
+            </circle>
+            <circle cx="232" cy="72" r="2" fill="#ffffff" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.6;1;0.6" dur="1.7s" repeatCount="indefinite" begin="1.1s"/>
+            </circle>
+            <circle cx="237" cy="85" r="2.5" fill="#ffff00" filter="url(#galaxyGlow)">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="1.6s" repeatCount="indefinite" begin="0.4s"/>
+            </circle>
+
+            <!-- Galaxy scales - nebula-like -->
+            <circle cx="85" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="90" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="132" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="137" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="182" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="187" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="232" cy="73" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+            <circle cx="237" cy="84" r="6" fill="url(#nebulaGrad)" opacity="0.7" filter="url(#galaxyGlow)"/>
+        </svg>
+    `;
+}
+
+// ===== ANIMATION FUNCTION =====
     function animateSnake(startPosition) {
         const wrapper = document.getElementById('snakeWrapper');
-        const container = document.getElementById('snakeContainer');
-
-        if (!wrapper || !container) return;
+        if (!wrapper) return;
 
         let position = startPosition;
         const speed = 0.15;
 
-        function animate() {
+        function move() {
             position += speed;
-
-            if (position > 110) {
-                position = -30;
+            if (position > 100) {
+                position = -20;
             }
-
             wrapper.style.left = position + '%';
             localStorage.setItem('snakePosition', position.toString());
-
-            requestAnimationFrame(animate);
+            requestAnimationFrame(move);
         }
 
-        animate();
+        move();
     }
 
     // ===== GLOBAL STYLES =====
     function addGlobalStyles() {
-        if (document.getElementById('galaxyEnhancedStyles')) return;
+        if (document.getElementById('snakeGlobalStyles')) return;
 
-        const style = document.createElement('style');
-        style.id = 'galaxyEnhancedStyles';
-        style.textContent = `
-            body {
-                overflow-x: hidden !important;
-            }
-            table {
-                border-collapse: separate !important;
-                border-spacing: 0 !important;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-                border-radius: 8px !important;
-                overflow: hidden !important;
-                background: rgba(255, 255, 255, 0.95) !important;
-            }
-            table th {
-                position: sticky !important;
-                top: 0 !important;
-                z-index: 10 !important;
-            }
-            table tbody tr:hover {
-                background-color: rgba(102, 126, 234, 0.05) !important;
-                transition: background-color 0.2s ease !important;
-            }
-            table td {
-                padding: 12px 10px !important;
-            }
-            table tbody tr:has(td:first-child:contains("TOTAL")) {
-                background: linear-gradient(90deg, #f9fafb 0%, #f3f4f6 100%) !important;
-                font-weight: 700 !important;
-                border-top: 3px solid #667eea !important;
-            }
-            table td:nth-child(3),
-            table td:nth-child(4),
-            table td:nth-child(5),
-            table td:nth-child(6),
-            table td:nth-child(7),
-            table td:nth-child(8) {
-                text-align: center !important;
-            }
-            table td a:hover {
-                text-decoration: underline !important;
+        const styleSheet = document.createElement('style');
+        styleSheet.id = 'snakeGlobalStyles';
+        styleSheet.textContent = `
+            @keyframes float {
+                0%, 100% { transform: translateY(0px); }
+                50% { transform: translateY(-10px); }
             }
         `;
-        document.head.appendChild(style);
+        document.head.appendChild(styleSheet);
     }
 
 })();
