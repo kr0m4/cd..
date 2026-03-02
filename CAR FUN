@@ -1,0 +1,1056 @@
+// ==UserScript==
+// @name         Hill Climb Racing GWR
+// @namespace    http://tampermonkey.net/
+// @version      3.0
+// @description  Conversion rate toggle with Hill Climb Racing car evolution
+// @author       kr0m4
+// @match        https://galaxywebrevenue2.com/report/offer*
+// @match        https://galaxywebrevenue2.com/*
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ===== STATE MANAGEMENT =====
+    let currentConversions = 0;
+    let showConversionRate = localStorage.getItem('showConversionRate') === 'true';
+    let originalConversionsData = {};
+    let username = '';
+
+    // Auto-refresh every 10 seconds
+    let autoRefreshTimer = setTimeout(function() {
+        location.reload();
+    }, 10000);
+
+    // ===== HELPER FUNCTIONS =====
+
+    function extractUserId() {
+        const urlMatch = window.location.href.match(/user\/(\d+)/);
+        if (urlMatch) return urlMatch[1];
+        const links = document.querySelectorAll('a[href*="/user/"]');
+        for (const link of links) {
+            const linkMatch = link.href.match(/user\/(\d+)/);
+            if (linkMatch) return linkMatch[1];
+        }
+        return null;
+    }
+
+    function extractUsername() {
+        const usernameElements = [
+            document.querySelector('[class*="user"]'),
+            document.querySelector('[class*="name"]'),
+            document.querySelector('.username'),
+            document.querySelector('#username')
+        ];
+        for (const el of usernameElements) {
+            if (el && el.textContent.trim()) return el.textContent.trim();
+        }
+        return 'PLAYER';
+    }
+
+    function getDateRangeFromPage() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const dFrom = urlParams.get('d_from');
+        const dTo = urlParams.get('d_to');
+        const dateSelect = urlParams.get('dateSelect');
+        if (dFrom && dTo) return { from: dFrom, to: dTo, dateSelect: dateSelect || '0' };
+        const fromInput = document.querySelector('input[name="d_from"]');
+        const toInput = document.querySelector('input[name="d_to"]');
+        if (fromInput && toInput && fromInput.value && toInput.value) {
+            return { from: fromInput.value, to: toInput.value, dateSelect: '0' };
+        }
+        const today = new Date().toISOString().split('T')[0];
+        return { from: today, to: today, dateSelect: '0' };
+    }
+
+    function buildConversionUrl(userId, offerId, dateRange) {
+        return `https://galaxywebrevenue2.com/user/${userId}/${offerId}/conversions-by-country?d_from=${dateRange.from}&d_to=${dateRange.to}&dateSelect=${dateRange.dateSelect}`;
+    }
+
+    function extractOfferIdFromRow(row) {
+        for (let i = 0; i < Math.min(3, row.cells.length); i++) {
+            const cell = row.cells[i];
+            const link = cell.querySelector('a');
+            if (link && link.href) {
+                const linkMatch = link.href.match(/\/offer\/(\d+)/);
+                if (linkMatch) return linkMatch[1];
+            }
+            const text = cell.textContent.trim();
+            if (/^\d+$/.test(text)) {
+                const num = parseInt(text);
+                if (num > 900 && num < 10000) return text;
+            }
+        }
+        return null;
+    }
+
+    // ===== MAIN INITIALIZATION =====
+    window.addEventListener('load', function() {
+        username = extractUsername();
+        enhanceReportTable();
+        createToggleButton();
+    });
+
+    // ===== TOGGLE BUTTON =====
+    function createToggleButton() {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'conversionToggleBtn';
+        toggleBtn.textContent = showConversionRate ? '🏎️ Show Conversions' : '🏎️ Show Conv Rate';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 80px;
+            right: -300px;
+            z-index: 9999;
+            padding: 12px 24px;
+            background-color: #e65c00;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        `;
+        toggleBtn.onmouseover = () => {
+            toggleBtn.style.backgroundColor = '#c44d00';
+            toggleBtn.style.transform = 'scale(1.05)';
+        };
+        toggleBtn.onmouseout = () => {
+            toggleBtn.style.backgroundColor = '#e65c00';
+            toggleBtn.style.transform = 'scale(1)';
+        };
+        toggleBtn.onclick = toggleConversionDisplay;
+        document.body.appendChild(toggleBtn);
+
+        const toggleHoverZone = document.createElement('div');
+        toggleHoverZone.id = 'toggleHoverZone';
+        toggleHoverZone.style.cssText = `
+            position: fixed; top: 60px; right: 0;
+            width: 200px; height: 100px;
+            z-index: 9998; pointer-events: all;
+        `;
+        toggleHoverZone.onmouseenter = () => { toggleBtn.style.right = '20px'; };
+        toggleHoverZone.onmouseleave = () => {
+            setTimeout(() => { if (!toggleBtn.matches(':hover')) toggleBtn.style.right = '-300px'; }, 100);
+        };
+        toggleBtn.onmouseleave = () => {
+            setTimeout(() => { if (!toggleHoverZone.matches(':hover')) toggleBtn.style.right = '-300px'; }, 100);
+        };
+        document.body.appendChild(toggleHoverZone);
+    }
+
+    // ===== TOGGLE FUNCTIONALITY =====
+    function toggleConversionDisplay() {
+        showConversionRate = !showConversionRate;
+        localStorage.setItem('showConversionRate', showConversionRate.toString());
+        const toggleBtn = document.getElementById('conversionToggleBtn');
+        toggleBtn.textContent = showConversionRate ? '🏎️ Show Conversions' : '🏎️ Show Conv Rate';
+        enhanceReportTable();
+    }
+
+    // ===== ENHANCED REPORT TABLE =====
+    function enhanceReportTable() {
+        const table = document.querySelector('table');
+        if (!table) {
+            setTimeout(enhanceReportTable, 500);
+            return;
+        }
+        const headerRow = table.querySelector('thead tr') || table.rows[0];
+        if (!headerRow) return;
+
+        const headers = Array.from(headerRow.cells);
+        const conversionsIndex = headers.findIndex(cell =>
+            cell.textContent.trim() === 'Conversions' || cell.textContent.trim() === 'Conversion Rate'
+        );
+        if (conversionsIndex === -1) return;
+
+        const conversionsHeader = headers[conversionsIndex];
+        conversionsHeader.textContent = showConversionRate ? 'Conversion Rate' : 'Conversions';
+        conversionsHeader.style.cssText = 'text-align: center !important;';
+
+        const tbody = table.querySelector('tbody') || table;
+        const rows = Array.from(tbody.rows).slice(headerRow.parentElement.tagName === 'THEAD' ? 0 : 1);
+
+        let totalRow = null;
+        let totalUnique = 0;
+        let totalConversions = 0;
+
+        const userId = extractUserId();
+        const dateRange = getDateRangeFromPage();
+
+        rows.forEach((row, rowIndex) => {
+            if (row.cells[0]?.textContent.trim() === 'Offer ID') return;
+            const isTotalRow = row.cells[0]?.textContent.trim() === 'TOTAL';
+
+            if (isTotalRow) {
+                totalRow = row;
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+                if (uniqueCell && conversionsCell) {
+                    totalUnique = parseInt(uniqueCell.textContent.trim()) || 0;
+                    if (!originalConversionsData[`total`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
+                            originalConversionsData[`total`] = originalText;
+                        }
+                    }
+                    if (showConversionRate) {
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+                        const displayText = totalUnique > 0 ? ((totalConversions / totalUnique) * 100).toFixed(2) + '%' : '0.00%';
+                        conversionsCell.textContent = displayText;
+                        conversionsCell.style.cssText = 'text-align: center !important;';
+                    } else {
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+                        conversionsCell.textContent = originalConversionsData[`total`] || totalConversions;
+                        conversionsCell.style.cssText = 'text-align: center !important;';
+                    }
+                }
+            } else {
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+                if (uniqueCell && conversionsCell) {
+                    const unique = parseInt(uniqueCell.textContent.trim()) || 0;
+                    if (!originalConversionsData[`row_${rowIndex}`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
+                            originalConversionsData[`row_${rowIndex}`] = originalText;
+                        }
+                    }
+                    if (showConversionRate) {
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || conversionsCell.textContent.trim()) || 0;
+                        conversionsCell.textContent = unique > 0 ? ((conversions / unique) * 100).toFixed(2) + '%' : '0.00%';
+                        conversionsCell.style.cssText = 'text-align: center !important;';
+                    } else {
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || '0');
+                        const offerId = extractOfferIdFromRow(row);
+                        if (userId && offerId && conversions > 0) {
+                            const conversionUrl = buildConversionUrl(userId, offerId, dateRange);
+                            conversionsCell.innerHTML = `<a href="${conversionUrl}" style="color: #e65c00; text-decoration: none; cursor: pointer;">${conversions}</a>`;
+                        } else {
+                            conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
+                        }
+                        conversionsCell.style.cssText = 'text-align: center !important;';
+                    }
+                }
+            }
+        });
+
+        const existingCar = document.getElementById('carAnimationRow');
+        if (existingCar) existingCar.remove();
+
+        if (totalRow && showConversionRate) {
+            createHillClimbRacing(totalRow.parentNode, totalRow, totalConversions);
+        }
+
+        addGlobalStyles();
+    }
+
+    // ===== CAR EVOLUTION DATA =====
+    function getCarEvolution(conversions) {
+        const stages = [
+            { stage: 'jalopy',      name: 'Jalopy',          label: '🚗 Stage 1', bgColor: '#1a1a2e', borderColor: '#666', height: 90  },
+            { stage: 'pickup',      name: 'Pickup Truck',    label: '🛻 Stage 2', bgColor: '#1a2a1a', borderColor: '#4caf50', height: 95  },
+            { stage: 'jeep',        name: 'Jeep 4x4',        label: '🚙 Stage 3', bgColor: '#1a1a2e', borderColor: '#2196f3', height: 100 },
+            { stage: 'muscle',      name: 'Muscle Car',      label: '🔥 Stage 4', bgColor: '#2a0a0a', borderColor: '#f44336', height: 100 },
+            { stage: 'rally',       name: 'Rally Car',       label: '⚡ Stage 5', bgColor: '#0a1a2a', borderColor: '#00bcd4', height: 105 },
+            { stage: 'supercar',    name: 'Supercar',        label: '🏆 Stage 6', bgColor: '#1a0a2a', borderColor: '#9c27b0', height: 105 },
+            { stage: 'formula',     name: 'Formula One',     label: '🏁 Stage 7', bgColor: '#0a0a0a', borderColor: '#ff9800', height: 110 },
+            { stage: 'rocket',      name: 'Rocket Car',      label: '🚀 Stage 8', bgColor: '#000510', borderColor: '#00e5ff', height: 115 },
+        ];
+        const idx = Math.min(conversions, stages.length - 1);
+        return stages[idx];
+    }
+
+    // ===== BADGE STYLE =====
+    function getCarBadgeStyle(stage, conversions) {
+        const configs = {
+            jalopy:    { bg: 'linear-gradient(135deg, #555 0%, #888 100%)', color: '#fff', size: 28, shadow: 'rgba(100,100,100,0.5)', border: '#999', glow: '' },
+            pickup:    { bg: 'linear-gradient(135deg, #2e7d32 0%, #66bb6a 100%)', color: '#fff', size: 32, shadow: 'rgba(76,175,80,0.6)', border: '#4caf50', glow: '0 0 12px rgba(76,175,80,0.8)' },
+            jeep:      { bg: 'linear-gradient(135deg, #1565c0 0%, #42a5f5 100%)', color: '#fff', size: 34, shadow: 'rgba(33,150,243,0.6)', border: '#2196f3', glow: '0 0 16px rgba(33,150,243,0.8)' },
+            muscle:    { bg: 'linear-gradient(135deg, #b71c1c 0%, #ef5350 100%)', color: '#fff', size: 36, shadow: 'rgba(244,67,54,0.7)', border: '#f44336', glow: '0 0 20px rgba(244,67,54,0.9)', anim: 'muscleFlicker 0.8s ease-in-out infinite' },
+            rally:     { bg: 'linear-gradient(135deg, #006064 0%, #00bcd4 100%)', color: '#fff', size: 38, shadow: 'rgba(0,188,212,0.7)', border: '#00bcd4', glow: '0 0 24px rgba(0,188,212,1)', anim: 'rallyPulse 0.7s ease-in-out infinite' },
+            supercar:  { bg: 'linear-gradient(135deg, #4a148c 0%, #ce93d8 100%)', color: '#fff', size: 40, shadow: 'rgba(156,39,176,0.8)', border: '#9c27b0', glow: '0 0 30px rgba(156,39,176,1)', anim: 'superPulse 0.9s ease-in-out infinite' },
+            formula:   { bg: 'linear-gradient(135deg, #e65100 0%, #ffcc02 100%)', color: '#111', size: 44, shadow: 'rgba(255,152,0,0.9)', border: '#ff9800', glow: '0 0 40px rgba(255,152,0,1)', anim: 'formulaPulse 0.6s ease-in-out infinite' },
+            rocket:    { bg: 'linear-gradient(135deg, #001f3f 0%, #00e5ff 50%, #001f3f 100%)', color: '#fff', size: 48, shadow: 'rgba(0,229,255,1)', border: '#00e5ff', glow: '0 0 50px rgba(0,229,255,1)', anim: 'rocketPulse 0.5s ease-in-out infinite' },
+        };
+        const c = configs[stage] || configs.jalopy;
+        const animStyle = c.anim ? `animation: ${c.anim};` : '';
+        const extraCSS = `
+            background: ${c.bg};
+            color: ${c.color};
+            font-size: ${c.size}px;
+            font-weight: bold;
+            padding: 10px 26px;
+            border-radius: 50px;
+            margin: 0 20px;
+            box-shadow: 0 4px 20px ${c.shadow}, ${c.glow || '0 0 0 transparent'};
+            font-family: 'Arial Black', sans-serif;
+            min-width: 70px;
+            text-align: center;
+            border: 3px solid ${c.border};
+            ${animStyle}
+        `;
+        return `
+            <div style="${extraCSS}">${conversions}</div>
+            <style>
+                @keyframes muscleFlicker { 0%,100%{filter:brightness(1) hue-rotate(0deg);} 50%{filter:brightness(1.3) hue-rotate(5deg);} }
+                @keyframes rallyPulse    { 0%,100%{transform:scale(1);filter:brightness(1.1);} 50%{transform:scale(1.07);filter:brightness(1.4);} }
+                @keyframes superPulse    { 0%,100%{transform:scale(1) rotate(0deg);} 50%{transform:scale(1.08) rotate(1deg);} }
+                @keyframes formulaPulse  { 0%,100%{transform:scale(1);box-shadow:0 4px 20px rgba(255,152,0,0.9),0 0 40px rgba(255,152,0,1);} 50%{transform:scale(1.1);box-shadow:0 4px 30px rgba(255,152,0,1),0 0 60px rgba(255,152,0,1);} }
+                @keyframes rocketPulse   { 0%,100%{transform:scale(1);filter:brightness(1.2) drop-shadow(0 0 20px #00e5ff);} 50%{transform:scale(1.12);filter:brightness(1.6) drop-shadow(0 0 40px #00e5ff);} }
+            </style>
+        `;
+    }
+
+    // ===== CAR SVG FUNCTIONS =====
+
+    // Stage 0: Jalopy (0 conversions) - rusty old heap
+    function getJalopySVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="jBody" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#8B6F47"/>
+                    <stop offset="100%" style="stop-color:#5C4033"/>
+                </linearGradient>
+            </defs>
+            <!-- Ground shadow -->
+            <ellipse cx="100" cy="90" rx="85" ry="6" fill="rgba(0,0,0,0.3)"/>
+            <!-- Exhaust smoke puffs -->
+            <circle cx="12" cy="62" r="5" fill="rgba(200,200,200,0.4)">
+                <animate attributeName="cx" values="12;5;-2" dur="1.2s" repeatCount="indefinite"/>
+                <animate attributeName="r" values="5;8;11" dur="1.2s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.5;0.3;0" dur="1.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="14" cy="64" r="4" fill="rgba(200,200,200,0.3)">
+                <animate attributeName="cx" values="14;6;-2" dur="1.5s" repeatCount="indefinite" begin="0.3s"/>
+                <animate attributeName="r" values="4;7;10" dur="1.5s" repeatCount="indefinite" begin="0.3s"/>
+                <animate attributeName="opacity" values="0.4;0.2;0" dur="1.5s" repeatCount="indefinite" begin="0.3s"/>
+            </circle>
+            <!-- Body -->
+            <rect x="20" y="48" width="160" height="32" rx="6" fill="url(#jBody)"/>
+            <!-- Cabin -->
+            <path d="M55,48 L65,22 L135,22 L145,48 Z" fill="#6B4F3A" stroke="#3E2C1A" stroke-width="1.5"/>
+            <!-- Windshield -->
+            <path d="M70,46 L76,26 L124,26 L130,46 Z" fill="#a8d8f0" opacity="0.7"/>
+            <!-- Rust patches -->
+            <circle cx="40" cy="58" r="7" fill="#6B3A2A" opacity="0.6"/>
+            <circle cx="160" cy="55" r="5" fill="#6B3A2A" opacity="0.5"/>
+            <circle cx="110" cy="72" r="4" fill="#6B3A2A" opacity="0.4"/>
+            <!-- Dents -->
+            <path d="M80,50 Q84,47 88,50" fill="none" stroke="#4a2f20" stroke-width="1.5"/>
+            <path d="M50,60 Q53,57 56,60" fill="none" stroke="#4a2f20" stroke-width="1.5"/>
+            <!-- Front bumper (hanging) -->
+            <rect x="158" y="68" width="22" height="5" rx="2" fill="#555" transform="rotate(-5,158,68)"/>
+            <!-- Rear bumper -->
+            <rect x="20" y="68" width="18" height="5" rx="2" fill="#555" transform="rotate(3,20,68)"/>
+            <!-- Wheels -->
+            <circle cx="52" cy="78" r="17" fill="#1a1a1a" stroke="#333" stroke-width="2"/>
+            <circle cx="52" cy="78" r="10" fill="#2d2d2d"/>
+            <circle cx="52" cy="78" r="5" fill="#888">
+                <animateTransform attributeName="transform" type="rotate" from="0 52 78" to="360 52 78" dur="0.8s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="148" cy="78" r="17" fill="#1a1a1a" stroke="#333" stroke-width="2"/>
+            <circle cx="148" cy="78" r="10" fill="#2d2d2d"/>
+            <circle cx="148" cy="78" r="5" fill="#888">
+                <animateTransform attributeName="transform" type="rotate" from="0 148 78" to="360 148 78" dur="0.8s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Exhaust pipe -->
+            <rect x="14" y="63" width="20" height="4" rx="2" fill="#555"/>
+        </svg>`;
+    }
+
+    // Stage 1: Pickup Truck (1 conversion)
+    function getPickupSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 210 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="pBody" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#388E3C"/>
+                    <stop offset="100%" style="stop-color:#1B5E20"/>
+                </linearGradient>
+            </defs>
+            <ellipse cx="105" cy="90" rx="90" ry="6" fill="rgba(0,0,0,0.3)"/>
+            <!-- Exhaust -->
+            <circle cx="14" cy="62" r="5" fill="rgba(180,180,180,0.5)">
+                <animate attributeName="cx" values="14;6;-3" dur="1s" repeatCount="indefinite"/>
+                <animate attributeName="r" values="5;9;13" dur="1s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.6;0.3;0" dur="1s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Truck bed -->
+            <rect x="20" y="45" width="75" height="35" rx="3" fill="#2E7D32" stroke="#1B5E20" stroke-width="1.5"/>
+            <rect x="22" y="47" width="71" height="15" rx="2" fill="#388E3C" opacity="0.4"/>
+            <!-- Cabin -->
+            <rect x="95" y="40" width="95" height="40" rx="6" fill="url(#pBody)"/>
+            <!-- Roof -->
+            <path d="M105,40 L112,18 L175,18 L182,40 Z" fill="#2E7D32" stroke="#1B5E20" stroke-width="1.5"/>
+            <!-- Windshield -->
+            <path d="M116,38 L121,22 L171,22 L176,38 Z" fill="#b8e4f9" opacity="0.8"/>
+            <!-- Side window -->
+            <rect x="100" y="44" width="22" height="18" rx="3" fill="#b8e4f9" opacity="0.6"/>
+            <!-- Headlight -->
+            <rect x="185" y="50" width="12" height="8" rx="2" fill="#fffde7" opacity="0.9"/>
+            <rect x="185" y="50" width="12" height="8" rx="2" fill="none" stroke="#ffeb3b" stroke-width="1"/>
+            <!-- Taillights -->
+            <rect x="22" y="52" width="8" height="10" rx="2" fill="#ef5350" opacity="0.9"/>
+            <!-- Wheels -->
+            <circle cx="52" cy="80" r="18" fill="#111" stroke="#333" stroke-width="2"/>
+            <circle cx="52" cy="80" r="11" fill="#222"/>
+            <circle cx="52" cy="80" r="5" fill="#555">
+                <animateTransform attributeName="transform" type="rotate" from="0 52 80" to="360 52 80" dur="0.6s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="162" cy="80" r="18" fill="#111" stroke="#333" stroke-width="2"/>
+            <circle cx="162" cy="80" r="11" fill="#222"/>
+            <circle cx="162" cy="80" r="5" fill="#555">
+                <animateTransform attributeName="transform" type="rotate" from="0 162 80" to="360 162 80" dur="0.6s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Mud flap -->
+            <rect x="135" y="68" width="6" height="12" rx="1" fill="#1B5E20"/>
+            <rect x="30" y="68" width="6" height="12" rx="1" fill="#1B5E20"/>
+            <!-- Exhaust pipe -->
+            <rect x="14" y="60" width="20" height="5" rx="2" fill="#444"/>
+        </svg>`;
+    }
+
+    // Stage 2: Jeep 4x4 (2 conversions)
+    function getJeepSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 210 105" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="jepBody" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#1565C0"/>
+                    <stop offset="100%" style="stop-color:#0D47A1"/>
+                </linearGradient>
+            </defs>
+            <ellipse cx="105" cy="94" rx="90" ry="6" fill="rgba(0,0,0,0.35)"/>
+            <!-- Exhaust -->
+            <circle cx="14" cy="63" r="6" fill="rgba(150,200,255,0.5)">
+                <animate attributeName="cx" values="14;5;-5" dur="0.9s" repeatCount="indefinite"/>
+                <animate attributeName="r" values="6;10;14" dur="0.9s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.6;0.3;0" dur="0.9s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Body - boxy jeep style -->
+            <rect x="18" y="42" width="174" height="40" rx="4" fill="url(#jepBody)"/>
+            <!-- Roof rack -->
+            <rect x="40" y="18" width="120" height="6" rx="2" fill="#0D47A1"/>
+            <rect x="48" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <rect x="70" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <rect x="92" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <rect x="114" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <rect x="136" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <rect x="158" y="14" width="5" height="10" rx="1" fill="#1565C0"/>
+            <!-- Cabin (boxy) -->
+            <rect x="38" y="22" width="134" height="22" rx="3" fill="#1976D2"/>
+            <!-- Windshield -->
+            <rect x="46" y="24" width="80" height="16" rx="2" fill="#b3e5fc" opacity="0.85"/>
+            <!-- Rear window -->
+            <rect x="132" y="24" width="30" height="16" rx="2" fill="#b3e5fc" opacity="0.6"/>
+            <!-- Side stripe -->
+            <rect x="18" y="58" width="174" height="4" rx="1" fill="#42A5F5" opacity="0.6"/>
+            <!-- Roll bar visible through roof -->
+            <line x1="80" y1="22" x2="80" y2="42" stroke="#0D47A1" stroke-width="3"/>
+            <line x1="130" y1="22" x2="130" y2="42" stroke="#0D47A1" stroke-width="3"/>
+            <!-- Headlights (dual round) -->
+            <circle cx="186" cy="54" r="7" fill="#FFF9C4" opacity="0.95"/>
+            <circle cx="186" cy="54" r="7" fill="none" stroke="#FFEE58" stroke-width="1.5"/>
+            <!-- Taillights -->
+            <circle cx="22" cy="55" r="5" fill="#EF5350" opacity="0.9"/>
+            <!-- Bumper guards -->
+            <rect x="186" y="63" width="14" height="6" rx="2" fill="#333"/>
+            <rect x="10" y="63" width="14" height="6" rx="2" fill="#333"/>
+            <!-- Big off-road wheels -->
+            <circle cx="52" cy="82" r="20" fill="#0a0a0a" stroke="#222" stroke-width="2"/>
+            <circle cx="52" cy="82" r="13" fill="#1a1a1a"/>
+            <circle cx="52" cy="82" r="6" fill="#444">
+                <animateTransform attributeName="transform" type="rotate" from="0 52 82" to="360 52 82" dur="0.55s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Tire treads -->
+            <circle cx="52" cy="82" r="19" fill="none" stroke="#333" stroke-width="2" stroke-dasharray="8,5"/>
+            <circle cx="158" cy="82" r="20" fill="#0a0a0a" stroke="#222" stroke-width="2"/>
+            <circle cx="158" cy="82" r="13" fill="#1a1a1a"/>
+            <circle cx="158" cy="82" r="6" fill="#444">
+                <animateTransform attributeName="transform" type="rotate" from="0 158 82" to="360 158 82" dur="0.55s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="158" cy="82" r="19" fill="none" stroke="#333" stroke-width="2" stroke-dasharray="8,5"/>
+            <!-- Exhaust pipe -->
+            <rect x="12" y="60" width="22" height="5" rx="2" fill="#555"/>
+            <rect x="10" y="61" width="5" height="3" rx="1" fill="#444"/>
+        </svg>`;
+    }
+
+    // Stage 3: Muscle Car (3 conversions)
+    function getMuscleSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 220 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="mBody" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#D32F2F"/>
+                    <stop offset="100%" style="stop-color:#7f0000"/>
+                </linearGradient>
+                <radialGradient id="mGlow">
+                    <stop offset="0%" style="stop-color:#FF1744;stop-opacity:0.6"/>
+                    <stop offset="100%" style="stop-color:#FF1744;stop-opacity:0"/>
+                </radialGradient>
+                <filter id="mEngineGlow">
+                    <feGaussianBlur stdDeviation="3" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+            </defs>
+            <!-- Engine glow under hood -->
+            <ellipse cx="185" cy="72" rx="30" ry="10" fill="url(#mGlow)">
+                <animate attributeName="rx" values="30;36;30" dur="0.5s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="110" cy="90" rx="95" ry="6" fill="rgba(0,0,0,0.35)"/>
+            <!-- Flame exhaust -->
+            <polygon points="10,62 3,56 6,62 0,58 5,64 -1,62 4,66" fill="#FF6D00" opacity="0.9" filter="url(#mEngineGlow)">
+                <animate attributeName="opacity" values="0.9;0.5;0.9" dur="0.2s" repeatCount="indefinite"/>
+                <animateTransform attributeName="transform" type="translate" values="0,0;-3,-1;0,0" dur="0.15s" repeatCount="indefinite"/>
+            </polygon>
+            <!-- Body - low and wide muscle car shape -->
+            <path d="M18,68 L18,52 L30,42 L80,38 L110,34 L165,36 L195,44 L210,52 L210,68 Z" fill="url(#mBody)"/>
+            <!-- Hood scoop -->
+            <path d="M130,34 L145,28 L175,30 L175,36 L130,36 Z" fill="#B71C1C"/>
+            <rect x="143" y="24" width="20" height="6" rx="2" fill="#7f0000"/>
+            <!-- Cabin -->
+            <path d="M55,40 L70,20 L150,20 L165,40 Z" fill="#C62828"/>
+            <!-- Windshield -->
+            <path d="M72,38 L82,24 L148,24 L158,38 Z" fill="#b3d9f7" opacity="0.85"/>
+            <!-- Racing stripes -->
+            <path d="M80,20 L80,68" stroke="white" stroke-width="4" opacity="0.8"/>
+            <path d="M92,20 L92,68" stroke="white" stroke-width="4" opacity="0.8"/>
+            <!-- Headlights -->
+            <rect x="196" y="50" width="14" height="8" rx="2" fill="#FFFDE7" opacity="0.95" filter="url(#mEngineGlow)"/>
+            <!-- Taillights -->
+            <rect x="10" y="52" width="10" height="8" rx="2" fill="#FF1744" opacity="0.9"/>
+            <!-- Side vents -->
+            <rect x="170" y="50" width="18" height="4" rx="1" fill="#7f0000"/>
+            <rect x="170" y="57" width="18" height="4" rx="1" fill="#7f0000"/>
+            <!-- Exhaust (dual) -->
+            <rect x="12" y="62" width="18" height="4" rx="2" fill="#333"/>
+            <rect x="12" y="68" width="18" height="4" rx="2" fill="#333"/>
+            <!-- Wheels -->
+            <circle cx="55" cy="76" r="18" fill="#0d0d0d" stroke="#1a1a1a" stroke-width="2"/>
+            <circle cx="55" cy="76" r="12" fill="#1a1a1a"/>
+            <!-- Muscle car rim (5-spoke) -->
+            <line x1="55" y1="64" x2="55" y2="76" stroke="#888" stroke-width="3">
+                <animateTransform attributeName="transform" type="rotate" from="0 55 76" to="360 55 76" dur="0.5s" repeatCount="indefinite"/>
+            </line>
+            <circle cx="55" cy="76" r="4" fill="#aaa"/>
+            <circle cx="165" cy="76" r="18" fill="#0d0d0d" stroke="#1a1a1a" stroke-width="2"/>
+            <circle cx="165" cy="76" r="12" fill="#1a1a1a"/>
+            <line x1="165" y1="64" x2="165" y2="76" stroke="#888" stroke-width="3">
+                <animateTransform attributeName="transform" type="rotate" from="0 165 76" to="360 165 76" dur="0.5s" repeatCount="indefinite"/>
+            </line>
+            <circle cx="165" cy="76" r="4" fill="#aaa"/>
+        </svg>`;
+    }
+
+    // Stage 4: Rally Car (4 conversions)
+    function getRallySVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 220 105" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="rBody" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#00ACC1"/>
+                    <stop offset="50%" style="stop-color:#0097A7"/>
+                    <stop offset="100%" style="stop-color:#006064"/>
+                </linearGradient>
+                <filter id="rGlow">
+                    <feGaussianBlur stdDeviation="4" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+            </defs>
+            <!-- Speed lines (motion blur effect) -->
+            <line x1="0" y1="45" x2="40" y2="45" stroke="#00BCD4" stroke-width="2" opacity="0.5">
+                <animate attributeName="x1" values="0;-20;0" dur="0.3s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.5;0;0.5" dur="0.3s" repeatCount="indefinite"/>
+            </line>
+            <line x1="0" y1="52" x2="30" y2="52" stroke="#00BCD4" stroke-width="1.5" opacity="0.4">
+                <animate attributeName="x1" values="0;-15;0" dur="0.25s" repeatCount="indefinite" begin="0.1s"/>
+                <animate attributeName="opacity" values="0.4;0;0.4" dur="0.25s" repeatCount="indefinite" begin="0.1s"/>
+            </line>
+            <line x1="0" y1="60" x2="50" y2="60" stroke="#00BCD4" stroke-width="2" opacity="0.3">
+                <animate attributeName="x1" values="0;-25;0" dur="0.35s" repeatCount="indefinite" begin="0.05s"/>
+                <animate attributeName="opacity" values="0.3;0;0.3" dur="0.35s" repeatCount="indefinite" begin="0.05s"/>
+            </line>
+            <ellipse cx="110" cy="93" rx="92" ry="6" fill="rgba(0,0,0,0.35)"/>
+            <!-- Exhaust -->
+            <circle cx="14" cy="66" r="5" fill="rgba(0,188,212,0.4)" filter="url(#rGlow)">
+                <animate attributeName="cx" values="14;4;-6" dur="0.7s" repeatCount="indefinite"/>
+                <animate attributeName="r" values="5;9;13" dur="0.7s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.5;0.3;0" dur="0.7s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Rally car body - sloped/aerodynamic -->
+            <path d="M18,70 L18,52 L28,40 L90,34 L150,34 L195,44 L210,56 L210,70 Z" fill="url(#rBody)"/>
+            <!-- Hood vent -->
+            <rect x="155" y="35" width="30" height="5" rx="2" fill="#006064"/>
+            <rect x="155" y="42" width="30" height="3" rx="1" fill="#006064"/>
+            <!-- Rally cabin -->
+            <path d="M48,38 L62,18 L148,18 L162,38 Z" fill="#00ACC1"/>
+            <!-- Windshield -->
+            <path d="M65,36 L74,22 L146,22 L155,36 Z" fill="#b3f0f7" opacity="0.85"/>
+            <!-- Rally number plate -->
+            <rect x="88" y="38" width="34" height="18" rx="3" fill="white"/>
+            <text x="105" y="51" text-anchor="middle" font-family="Arial Black" font-size="11" font-weight="bold" fill="#006064">47</text>
+            <!-- Sponsor stickers -->
+            <rect x="48" y="52" width="22" height="10" rx="2" fill="#FF6F00" opacity="0.9"/>
+            <rect x="155" y="52" width="25" height="10" rx="2" fill="#FF6F00" opacity="0.9"/>
+            <!-- Side skirts -->
+            <rect x="18" y="68" width="192" height="5" rx="2" fill="#004D5A"/>
+            <!-- Rally lights (roof bar) -->
+            <rect x="70" y="15" width="70" height="6" rx="2" fill="#222"/>
+            <circle cx="82" cy="18" r="4" fill="#FFFDE7" filter="url(#rGlow)" opacity="0.9"/>
+            <circle cx="96" cy="18" r="4" fill="#FFFDE7" filter="url(#rGlow)" opacity="0.9"/>
+            <circle cx="110" cy="18" r="4" fill="#FFFDE7" filter="url(#rGlow)" opacity="0.9"/>
+            <circle cx="124" cy="18" r="4" fill="#FFFDE7" filter="url(#rGlow)" opacity="0.9"/>
+            <!-- Headlights -->
+            <circle cx="200" cy="55" r="8" fill="#FFFDE7" filter="url(#rGlow)" opacity="0.95"/>
+            <!-- Taillights -->
+            <rect x="10" y="54" width="10" height="10" rx="2" fill="#EF5350"/>
+            <!-- Exhaust pipe -->
+            <rect x="10" y="64" width="22" height="5" rx="2" fill="#333"/>
+            <!-- Wheels with rally tread -->
+            <circle cx="55" cy="80" r="20" fill="#0a0a0a" stroke="#1a1a1a" stroke-width="2"/>
+            <circle cx="55" cy="80" r="20" fill="none" stroke="#333" stroke-width="3" stroke-dasharray="10,6"/>
+            <circle cx="55" cy="80" r="12" fill="#222"/>
+            <circle cx="55" cy="80" r="5" fill="#00BCD4" filter="url(#rGlow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 55 80" to="360 55 80" dur="0.4s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="165" cy="80" r="20" fill="#0a0a0a" stroke="#1a1a1a" stroke-width="2"/>
+            <circle cx="165" cy="80" r="20" fill="none" stroke="#333" stroke-width="3" stroke-dasharray="10,6"/>
+            <circle cx="165" cy="80" r="12" fill="#222"/>
+            <circle cx="165" cy="80" r="5" fill="#00BCD4" filter="url(#rGlow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 165 80" to="360 165 80" dur="0.4s" repeatCount="indefinite"/>
+            </circle>
+        </svg>`;
+    }
+
+    // Stage 5: Supercar (5 conversions)
+    function getSupercarSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 230 105" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="scBody" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#9C27B0"/>
+                    <stop offset="50%" style="stop-color:#7B1FA2"/>
+                    <stop offset="100%" style="stop-color:#4A148C"/>
+                </linearGradient>
+                <linearGradient id="scAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#E040FB"/>
+                    <stop offset="100%" style="stop-color:#AA00FF"/>
+                </linearGradient>
+                <filter id="scGlow">
+                    <feGaussianBlur stdDeviation="4" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+                <radialGradient id="underGlow">
+                    <stop offset="0%" style="stop-color:#E040FB;stop-opacity:0.8"/>
+                    <stop offset="100%" style="stop-color:#E040FB;stop-opacity:0"/>
+                </radialGradient>
+            </defs>
+            <!-- Underglow effect -->
+            <ellipse cx="115" cy="88" rx="100" ry="8" fill="url(#underGlow)">
+                <animate attributeName="ry" values="8;12;8" dur="1.2s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.7;1;0.7" dur="1.2s" repeatCount="indefinite"/>
+            </ellipse>
+            <!-- Speed lines -->
+            <line x1="0" y1="42" x2="45" y2="42" stroke="#E040FB" stroke-width="2" opacity="0.6">
+                <animate attributeName="opacity" values="0.6;0;0.6" dur="0.25s" repeatCount="indefinite"/>
+            </line>
+            <line x1="0" y1="50" x2="30" y2="50" stroke="#E040FB" stroke-width="1.5" opacity="0.4">
+                <animate attributeName="opacity" values="0.4;0;0.4" dur="0.3s" repeatCount="indefinite" begin="0.05s"/>
+            </line>
+            <!-- Supercar - extremely low and wide body -->
+            <path d="M20,72 L20,58 L35,46 L80,38 L120,32 L170,33 L205,44 L220,58 L220,72 Z" fill="url(#scBody)"/>
+            <!-- Rear wing -->
+            <rect x="15" y="44" width="8" height="22" rx="2" fill="#4A148C"/>
+            <rect x="8" y="42" width="22" height="5" rx="2" fill="#7B1FA2"/>
+            <!-- Hood lines -->
+            <path d="M120,32 L155,33 L155,46 L120,46 Z" fill="#6A1B9A" opacity="0.5"/>
+            <path d="M135,32 L135,72" stroke="#AB47BC" stroke-width="1.5" opacity="0.4"/>
+            <!-- Cabin (very low, sloped) -->
+            <path d="M60,42 L82,20 L160,20 L178,42 Z" fill="#8E24AA"/>
+            <!-- Windshield (raked) -->
+            <path d="M84,40 L96,24 L162,24 L173,40 Z" fill="#ce93d8" opacity="0.7"/>
+            <!-- Side air intakes -->
+            <rect x="165" y="52" width="20" height="8" rx="2" fill="#4A148C"/>
+            <rect x="25" y="52" width="15" height="8" rx="2" fill="#4A148C"/>
+            <!-- Neon accent stripe -->
+            <path d="M20,66 L220,66" stroke="url(#scAccent)" stroke-width="3" filter="url(#scGlow)" opacity="0.9"/>
+            <!-- Headlights (LED strip style) -->
+            <rect x="205" y="52" width="16" height="3" rx="1" fill="#E040FB" filter="url(#scGlow)"/>
+            <rect x="205" y="58" width="16" height="3" rx="1" fill="#E040FB" filter="url(#scGlow)"/>
+            <!-- Taillights -->
+            <rect x="14" y="52" width="8" height="3" rx="1" fill="#E040FB" filter="url(#scGlow)" opacity="0.9"/>
+            <rect x="14" y="58" width="8" height="3" rx="1" fill="#E040FB" filter="url(#scGlow)" opacity="0.9"/>
+            <!-- Exhaust (quad) -->
+            <rect x="16" y="65" width="10" height="4" rx="2" fill="#222"/>
+            <rect x="28" y="65" width="10" height="4" rx="2" fill="#222"/>
+            <!-- Low-profile supercar wheels -->
+            <circle cx="58" cy="76" r="18" fill="#0a0a0a" stroke="#1a1a1a" stroke-width="2"/>
+            <!-- Multi-spoke rim -->
+            <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 58 76" to="360 58 76" dur="0.35s" repeatCount="indefinite"/>
+                <line x1="58" y1="58" x2="58" y2="76" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="58" y1="76" x2="72" y2="67" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="58" y1="76" x2="72" y2="85" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="58" y1="76" x2="58" y2="94" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="58" y1="76" x2="44" y2="85" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="58" y1="76" x2="44" y2="67" stroke="#AB47BC" stroke-width="2.5"/>
+            </g>
+            <circle cx="58" cy="76" r="10" fill="#1a1a1a"/>
+            <circle cx="58" cy="76" r="4" fill="#E040FB" filter="url(#scGlow)"/>
+            <circle cx="172" cy="76" r="18" fill="#0a0a0a" stroke="#1a1a1a" stroke-width="2"/>
+            <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 172 76" to="360 172 76" dur="0.35s" repeatCount="indefinite"/>
+                <line x1="172" y1="58" x2="172" y2="76" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="172" y1="76" x2="186" y2="67" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="172" y1="76" x2="186" y2="85" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="172" y1="76" x2="172" y2="94" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="172" y1="76" x2="158" y2="85" stroke="#AB47BC" stroke-width="2.5"/>
+                <line x1="172" y1="76" x2="158" y2="67" stroke="#AB47BC" stroke-width="2.5"/>
+            </g>
+            <circle cx="172" cy="76" r="10" fill="#1a1a1a"/>
+            <circle cx="172" cy="76" r="4" fill="#E040FB" filter="url(#scGlow)"/>
+        </svg>`;
+    }
+
+    // Stage 6: Formula One Car (6 conversions)
+    function getFormulaSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 240 110" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="f1Body" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#E65100"/>
+                    <stop offset="40%" style="stop-color:#FF6D00"/>
+                    <stop offset="70%" style="stop-color:#FFCC02"/>
+                    <stop offset="100%" style="stop-color:#FF6D00"/>
+                </linearGradient>
+                <filter id="f1Glow">
+                    <feGaussianBlur stdDeviation="5" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+                <radialGradient id="f1HeatGlow">
+                    <stop offset="0%" style="stop-color:#FF6D00;stop-opacity:0.8"/>
+                    <stop offset="100%" style="stop-color:#FF6D00;stop-opacity:0"/>
+                </radialGradient>
+            </defs>
+            <!-- Heat glow behind car -->
+            <ellipse cx="20" cy="72" rx="25" ry="10" fill="url(#f1HeatGlow)">
+                <animate attributeName="rx" values="25;35;25" dur="0.3s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.8;1;0.8" dur="0.3s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="120" cy="92" rx="100" ry="6" fill="rgba(0,0,0,0.4)"/>
+            <!-- Flame exhaust (F1 style) -->
+            <polygon points="16,70 5,65 10,70 2,68 8,72 1,72 7,76" fill="#FF6D00" filter="url(#f1Glow)" opacity="0.95">
+                <animate attributeName="opacity" values="0.95;0.6;0.95" dur="0.15s" repeatCount="indefinite"/>
+                <animateTransform attributeName="transform" type="translate" values="0,0;-4,-1;0,0" dur="0.12s" repeatCount="indefinite"/>
+            </polygon>
+            <!-- Speed lines -->
+            <line x1="0" y1="52" x2="55" y2="52" stroke="#FF6D00" stroke-width="2" opacity="0.7">
+                <animate attributeName="opacity" values="0.7;0;0.7" dur="0.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="0" y1="58" x2="40" y2="58" stroke="#FFCC02" stroke-width="1.5" opacity="0.5">
+                <animate attributeName="opacity" values="0.5;0;0.5" dur="0.22s" repeatCount="indefinite" begin="0.05s"/>
+            </line>
+            <!-- F1 Front wing -->
+            <path d="M185,72 L218,72 L218,76 L212,80 L185,80 Z" fill="#CC4A00"/>
+            <rect x="185" y="74" width="33" height="2" rx="1" fill="#FFCC02"/>
+            <!-- F1 Front wing endplates -->
+            <rect x="215" y="68" width="4" height="18" rx="1" fill="#CC4A00"/>
+            <!-- Rear wing -->
+            <rect x="12" y="46" width="30" height="7" rx="2" fill="#CC4A00"/>
+            <rect x="12" y="44" width="30" height="4" rx="1" fill="#FF6D00"/>
+            <rect x="18" y="46" width="4" height="16" rx="1" fill="#CC4A00"/>
+            <rect x="32" y="46" width="4" height="16" rx="1" fill="#CC4A00"/>
+            <!-- Main pod/body (very narrow) -->
+            <path d="M15,75 L15,64 L25,55 L60,50 L120,48 L185,50 L210,60 L215,72 L215,75 Z" fill="url(#f1Body)"/>
+            <!-- Sidepods -->
+            <path d="M55,52 L55,75 L100,75 L100,52 Z" fill="#FF6D00" opacity="0.8"/>
+            <path d="M150,52 L150,75 L185,75 L185,52 Z" fill="#FF6D00" opacity="0.8"/>
+            <!-- Engine cover -->
+            <path d="M25,58 L25,52 L110,48 L120,48 L120,58 Z" fill="#CC4A00"/>
+            <!-- Cockpit (very narrow) -->
+            <ellipse cx="128" cy="56" rx="22" ry="12" fill="#CC4A00"/>
+            <ellipse cx="128" cy="56" rx="16" ry="8" fill="#1a1a1a"/>
+            <!-- Helmet visible -->
+            <ellipse cx="126" cy="54" rx="10" ry="8" fill="#FF6D00"/>
+            <path d="M120,52 L132,52 L132,57 L120,57 Z" fill="#1a1a1a" opacity="0.7"/>
+            <!-- DRS vent -->
+            <rect x="20" y="43" width="24" height="3" rx="1" fill="#FFCC02" filter="url(#f1Glow)" opacity="0.9"/>
+            <!-- HALO safety device -->
+            <path d="M108,50 Q120,44 140,50" fill="none" stroke="#FFCC02" stroke-width="2.5" opacity="0.9"/>
+            <!-- Sponsor text -->
+            <rect x="62" y="58" width="30" height="10" rx="2" fill="white" opacity="0.9"/>
+            <text x="77" y="67" text-anchor="middle" font-family="Arial Black" font-size="7" font-weight="bold" fill="#E65100">GWR</text>
+            <!-- LED headlight strip -->
+            <rect x="207" y="60" width="8" height="2" rx="1" fill="#FFCC02" filter="url(#f1Glow)"/>
+            <rect x="207" y="64" width="8" height="2" rx="1" fill="#FFCC02" filter="url(#f1Glow)"/>
+            <!-- Exhaust pipe (F1 single central) -->
+            <rect x="10" y="68" width="18" height="5" rx="2" fill="#333"/>
+            <!-- F1 Wheels (much wider rear, narrow front) -->
+            <ellipse cx="55" cy="80" rx="5" ry="18" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <ellipse cx="55" cy="80" rx="4" ry="12" fill="#1a1a1a"/>
+            <circle cx="55" cy="80" r="4" fill="#FF6D00" filter="url(#f1Glow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 55 80" to="360 55 80" dur="0.3s" repeatCount="indefinite"/>
+            </circle>
+            <ellipse cx="175" cy="80" rx="7" ry="22" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <ellipse cx="175" cy="80" rx="5" ry="15" fill="#1a1a1a"/>
+            <circle cx="175" cy="80" r="5" fill="#FF6D00" filter="url(f1Glow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 175 80" to="360 175 80" dur="0.3s" repeatCount="indefinite"/>
+            </circle>
+        </svg>`;
+    }
+
+    // Stage 7: Rocket Car (7+ conversions)
+    function getRocketCarSVG(w, h) {
+        return `
+        <svg width="${w}" height="${h}" viewBox="0 0 240 115" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="rcBody" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#001f3f"/>
+                    <stop offset="30%" style="stop-color:#00365f"/>
+                    <stop offset="70%" style="stop-color:#0077b6"/>
+                    <stop offset="100%" style="stop-color:#00e5ff"/>
+                </linearGradient>
+                <linearGradient id="rcFlame" x1="100%" y1="0%" x2="0%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00e5ff"/>
+                    <stop offset="30%" style="stop-color:#0099cc"/>
+                    <stop offset="60%" style="stop-color:#ffffff"/>
+                    <stop offset="100%" style="stop-color:transparent"/>
+                </linearGradient>
+                <filter id="rcGlow">
+                    <feGaussianBlur stdDeviation="6" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+                <radialGradient id="rcCoreGlow">
+                    <stop offset="0%" style="stop-color:#00e5ff;stop-opacity:1"/>
+                    <stop offset="100%" style="stop-color:#00e5ff;stop-opacity:0"/>
+                </radialGradient>
+                <radialGradient id="rcUnderGlow">
+                    <stop offset="0%" style="stop-color:#00e5ff;stop-opacity:0.9"/>
+                    <stop offset="100%" style="stop-color:#00e5ff;stop-opacity:0"/>
+                </radialGradient>
+            </defs>
+            <!-- Cosmic underglow -->
+            <ellipse cx="120" cy="96" rx="105" ry="10" fill="url(#rcUnderGlow)">
+                <animate attributeName="ry" values="10;16;10" dur="0.8s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.8;1;0.8" dur="0.8s" repeatCount="indefinite"/>
+            </ellipse>
+            <!-- Rocket exhaust core -->
+            <ellipse cx="15" cy="72" rx="20" ry="6" fill="url(#rcCoreGlow)" filter="url(#rcGlow)">
+                <animate attributeName="rx" values="20;35;20" dur="0.2s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="1;0.6;1" dur="0.2s" repeatCount="indefinite"/>
+            </ellipse>
+            <!-- Rocket flame (animated) -->
+            <polygon points="16,68 -10,62 0,68 -15,65 -2,72 -12,72 0,76 -10,78 16,76" fill="url(#rcFlame)" filter="url(#rcGlow)" opacity="0.95">
+                <animate attributeName="opacity" values="0.95;0.7;0.95" dur="0.1s" repeatCount="indefinite"/>
+                <animateTransform attributeName="transform" type="translate" values="0,0;-8,-2;0,0" dur="0.08s" repeatCount="indefinite"/>
+            </polygon>
+            <polygon points="16,69 -5,65 3,70 -8,68 2,73 -6,73 3,77 16,75" fill="white" filter="url(#rcGlow)" opacity="0.7">
+                <animate attributeName="opacity" values="0.7;0.3;0.7" dur="0.12s" repeatCount="indefinite"/>
+            </polygon>
+            <!-- Speed lines (hyperspeed) -->
+            <line x1="0" y1="44" x2="60" y2="44" stroke="#00e5ff" stroke-width="2.5" opacity="0.8" filter="url(rcGlow)">
+                <animate attributeName="opacity" values="0.8;0;0.8" dur="0.15s" repeatCount="indefinite"/>
+                <animate attributeName="x2" values="60;30;60" dur="0.15s" repeatCount="indefinite"/>
+            </line>
+            <line x1="0" y1="52" x2="80" y2="52" stroke="#00e5ff" stroke-width="2" opacity="0.6">
+                <animate attributeName="opacity" values="0.6;0;0.6" dur="0.18s" repeatCount="indefinite" begin="0.03s"/>
+            </line>
+            <line x1="0" y1="62" x2="50" y2="62" stroke="#00bcd4" stroke-width="1.5" opacity="0.5">
+                <animate attributeName="opacity" values="0.5;0;0.5" dur="0.2s" repeatCount="indefinite" begin="0.07s"/>
+            </line>
+            <line x1="0" y1="82" x2="45" y2="82" stroke="#00e5ff" stroke-width="2" opacity="0.5">
+                <animate attributeName="opacity" values="0.5;0;0.5" dur="0.17s" repeatCount="indefinite" begin="0.04s"/>
+            </line>
+            <!-- Canard wings (front) -->
+            <path d="M192,58 L210,48 L218,50 L205,62 Z" fill="#00ACC1"/>
+            <path d="M192,82 L210,92 L218,90 L205,78 Z" fill="#00ACC1"/>
+            <!-- Rocket car body - needle nose -->
+            <path d="M16,74 L16,62 L30,50 L80,44 L130,40 L190,42 L218,55 L228,65 L228,74 L228,78 L218,85 L190,88 L130,90 L80,86 L30,80 L16,78 Z" fill="url(#rcBody)"/>
+            <!-- Nose cone highlight -->
+            <path d="M190,42 L220,60 L220,80 L190,88 L220,70 Z" fill="#0097A7" opacity="0.4"/>
+            <!-- Cockpit bubble (teardrop) -->
+            <ellipse cx="130" cy="60" rx="28" ry="16" fill="#0077b6" opacity="0.8"/>
+            <ellipse cx="130" cy="60" rx="22" ry="11" fill="#001f3f"/>
+            <!-- Pilot helmet silhouette -->
+            <ellipse cx="128" cy="60" rx="12" ry="10" fill="#00ACC1" opacity="0.6"/>
+            <path d="M120,58 L136,58 L136,64 L120,64 Z" fill="#001f3f"/>
+            <!-- LED strip on body -->
+            <path d="M30,44 L130,40 L185,42" fill="none" stroke="#00e5ff" stroke-width="2" filter="url(#rcGlow)" opacity="0.9"/>
+            <path d="M30,80 L130,84 L185,86" fill="none" stroke="#00e5ff" stroke-width="2" filter="url(#rcGlow)" opacity="0.9"/>
+            <!-- Side panels -->
+            <path d="M80,44 L80,86 L85,86 L85,44 Z" fill="#00bcd4" opacity="0.3"/>
+            <path d="M160,41 L160,89 L165,89 L165,41 Z" fill="#00bcd4" opacity="0.3"/>
+            <!-- Tail fins -->
+            <path d="M16,64 L0,50 L8,62 L8,74 L0,86 L16,78 Z" fill="#0097A7"/>
+            <path d="M8,62 L15,62 L15,78 L8,78 Z" fill="#00ACC1" opacity="0.5"/>
+            <!-- Headlight (nose light) -->
+            <circle cx="226" cy="69" r="6" fill="#00e5ff" filter="url(#rcGlow)" opacity="0.95">
+                <animate attributeName="r" values="6;8;6" dur="0.5s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Tail lights -->
+            <circle cx="18" cy="68" r="4" fill="#00e5ff" filter="url(#rcGlow)" opacity="0.9"/>
+            <circle cx="18" cy="76" r="4" fill="#00e5ff" filter="url(#rcGlow)" opacity="0.9"/>
+            <!-- Rocket car wheels (enclosed/streamlined) -->
+            <!-- Front wheel pod -->
+            <ellipse cx="170" cy="88" rx="30" ry="14" fill="#002a3a" stroke="#00ACC1" stroke-width="2" filter="url(#rcGlow)"/>
+            <ellipse cx="170" cy="88" rx="22" ry="10" fill="#001f3f"/>
+            <circle cx="170" cy="88" r="7" fill="#00e5ff" filter="url(#rcGlow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 170 88" to="360 170 88" dur="0.25s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Rear wheel pod -->
+            <ellipse cx="68" cy="88" rx="30" ry="14" fill="#002a3a" stroke="#00ACC1" stroke-width="2" filter="url(#rcGlow)"/>
+            <ellipse cx="68" cy="88" rx="22" ry="10" fill="#001f3f"/>
+            <circle cx="68" cy="88" r="7" fill="#00e5ff" filter="url(#rcGlow)">
+                <animateTransform attributeName="transform" type="rotate" from="0 68 88" to="360 68 88" dur="0.25s" repeatCount="indefinite"/>
+            </circle>
+            <!-- Stars/particles from hyperspeed -->
+            <circle cx="40" cy="35" r="1.5" fill="#00e5ff" opacity="0.8">
+                <animate attributeName="cx" values="40;-10" dur="0.4s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.8;0" dur="0.4s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="60" cy="90" r="1" fill="#00e5ff" opacity="0.6">
+                <animate attributeName="cx" values="60;10" dur="0.3s" repeatCount="indefinite" begin="0.1s"/>
+                <animate attributeName="opacity" values="0.6;0" dur="0.3s" repeatCount="indefinite" begin="0.1s"/>
+            </circle>
+            <circle cx="30" cy="65" r="2" fill="white" opacity="0.5">
+                <animate attributeName="cx" values="30;-15" dur="0.35s" repeatCount="indefinite" begin="0.2s"/>
+                <animate attributeName="opacity" values="0.5;0" dur="0.35s" repeatCount="indefinite" begin="0.2s"/>
+            </circle>
+        </svg>`;
+    }
+
+    // ===== GET CAR SVG =====
+    function getCarSVG(evolution) {
+        const w = 220, h = evolution.height;
+        switch(evolution.stage) {
+            case 'jalopy':   return getJalopySVG(w, h);
+            case 'pickup':   return getPickupSVG(w, h);
+            case 'jeep':     return getJeepSVG(w, h);
+            case 'muscle':   return getMuscleSVG(w, h);
+            case 'rally':    return getRallySVG(w, h);
+            case 'supercar': return getSupercarSVG(w, h);
+            case 'formula':  return getFormulaSVG(w, h);
+            case 'rocket':   return getRocketCarSVG(w, h);
+            default:         return getJalopySVG(w, h);
+        }
+    }
+
+    // ===== HILL CLIMB RACING ROW =====
+    function createHillClimbRacing(parentNode, totalRow, conversions) {
+        const evolution = getCarEvolution(conversions);
+        const carRow = document.createElement('tr');
+        carRow.id = 'carAnimationRow';
+
+        const carCell = document.createElement('td');
+        const headerRow = parentNode.closest('table').querySelector('thead tr') || parentNode.closest('table').rows[0];
+        const colCount = headerRow.cells.length;
+        carCell.colSpan = colCount;
+
+        const cellHeight = evolution.height + 60;
+        const savedPosition = parseFloat(localStorage.getItem('carPosition') || '0');
+
+        carCell.style.cssText = `
+            background: ${evolution.bgColor} !important;
+            padding: 20px 0 !important;
+            border-top: 2px solid ${evolution.borderColor} !important;
+            overflow: hidden !important;
+            position: relative !important;
+        `;
+
+        // Build road/ground
+        const roadHTML = `
+            <div style="position: absolute; bottom: 0; left: 0; width: 100%; height: 22px; background: #222; border-top: 3px solid ${evolution.borderColor}; opacity: 0.7; z-index: 1;">
+                <!-- Dashes on road -->
+                <div style="position: absolute; top: 8px; left: 0; width: 100%; height: 4px; background: repeating-linear-gradient(90deg, ${evolution.borderColor} 0px, ${evolution.borderColor} 30px, transparent 30px, transparent 70px); opacity: 0.5; animation: roadMove 0.4s linear infinite;"></div>
+            </div>
+        `;
+
+        const carSVG = getCarSVG(evolution);
+        const badgeHTML = getCarBadgeStyle(evolution.stage, conversions);
+
+        carCell.innerHTML = `
+            <style>
+                @keyframes roadMove {
+                    from { background-position: 0 0; }
+                    to   { background-position: -100px 0; }
+                }
+                @keyframes carBounce {
+                    0%,100% { transform: translateY(0px) rotate(0deg); }
+                    25% { transform: translateY(-2px) rotate(0.3deg); }
+                    75% { transform: translateY(1px) rotate(-0.3deg); }
+                }
+            </style>
+            <div id="carContainer" style="position:relative; height:${cellHeight}px; width:100%; overflow:hidden;">
+                <div style="position:absolute; top:10px; left:20px; color:${evolution.borderColor}; font-size:13px; font-weight:bold; z-index:5; font-family: 'Arial Black', sans-serif; text-shadow: 0 0 8px ${evolution.borderColor};">
+                    ${evolution.label} — ${evolution.name}
+                </div>
+                ${roadHTML}
+                <div id="carWrapper" style="position:absolute; left:${savedPosition}%; top: calc(50% - 16px); transform:translateY(-50%); display:flex; align-items:center; white-space:nowrap; animation: carBounce 0.4s ease-in-out infinite; z-index:3;">
+                    ${carSVG}
+                    ${badgeHTML}
+                </div>
+            </div>
+        `;
+
+        carRow.appendChild(carCell);
+
+        if (totalRow.nextSibling) {
+            parentNode.insertBefore(carRow, totalRow.nextSibling);
+        } else {
+            parentNode.appendChild(carRow);
+        }
+
+        animateCar(savedPosition, evolution.stage);
+    }
+
+    // ===== CAR ANIMATION =====
+    function animateCar(startPosition, stage) {
+        const wrapper = document.getElementById('carWrapper');
+        if (!wrapper) return;
+
+        // Speed increases with car stage
+        const speeds = {
+            jalopy:   0.08,
+            pickup:   0.11,
+            jeep:     0.13,
+            muscle:   0.17,
+            rally:    0.22,
+            supercar: 0.28,
+            formula:  0.36,
+            rocket:   0.48
+        };
+        const speed = speeds[stage] || 0.12;
+
+        let position = startPosition;
+
+        function move() {
+            position += speed;
+            if (position > 100) position = -30;
+            wrapper.style.left = position + '%';
+            localStorage.setItem('carPosition', position.toString());
+            requestAnimationFrame(move);
+        }
+
+        move();
+    }
+
+    // ===== GLOBAL STYLES =====
+    function addGlobalStyles() {
+        if (document.getElementById('carGlobalStyles')) return;
+        const styleSheet = document.createElement('style');
+        styleSheet.id = 'carGlobalStyles';
+        styleSheet.textContent = `
+            #carAnimationRow td { padding: 0 !important; }
+        `;
+        document.head.appendChild(styleSheet);
+    }
+
+})();
