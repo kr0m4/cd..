@@ -1,0 +1,536 @@
+// ==UserScript==
+// @name         Instagram Profile Hover Preview
+// @namespace    https://github.com/user/ig-hover-preview
+// @version      1.0
+// @description  Hover over any username or profile name on Instagram to see a sleek profile preview card with bio, followers, following count, post count, privacy status, and recent photos.
+// @author       Claude
+// @match        https://www.instagram.com/*
+// @grant        GM_xmlhttpRequest
+// @connect      www.instagram.com
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  /* ─────────────────────────────────────────────
+     STYLES
+  ───────────────────────────────────────────── */
+  const STYLE = `
+    #igHoverCard {
+      position: fixed;
+      z-index: 99999;
+      width: 255px;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 1.5px 6px rgba(0,0,0,0.08);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      color: #262626;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      transform: translateY(6px) scale(0.98);
+      overflow: hidden;
+    }
+    #igHoverCard.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+
+    /* Header */
+    #igHoverCard .igHC-header {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 11px 12px 9px;
+    }
+    #igHoverCard .igHC-avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #e0e0e0;
+      flex-shrink: 0;
+    }
+    #igHoverCard .igHC-avatar-placeholder {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #f0f0f0, #ddd);
+      flex-shrink: 0;
+    }
+    #igHoverCard .igHC-names {
+      flex: 1;
+      min-width: 0;
+    }
+    #igHoverCard .igHC-fullname {
+      font-weight: 700;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.3;
+    }
+    #igHoverCard .igHC-username {
+      color: #8e8e8e;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #igHoverCard .igHC-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 20px;
+      margin-top: 3px;
+    }
+    #igHoverCard .igHC-badge.public  { background: #e8f5e9; color: #2e7d32; }
+    #igHoverCard .igHC-badge.private { background: #fce4ec; color: #c62828; }
+
+    /* Stats */
+    #igHoverCard .igHC-stats {
+      display: flex;
+      border-top: 1px solid #efefef;
+      border-bottom: 1px solid #efefef;
+    }
+    #igHoverCard .igHC-stat {
+      flex: 1;
+      text-align: center;
+      padding: 7px 4px;
+    }
+    #igHoverCard .igHC-stat + .igHC-stat {
+      border-left: 1px solid #efefef;
+    }
+    #igHoverCard .igHC-stat-val {
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    #igHoverCard .igHC-stat-lbl {
+      color: #8e8e8e;
+      font-size: 10px;
+      margin-top: 1px;
+    }
+
+    /* Bio */
+    #igHoverCard .igHC-bio {
+      padding: 7px 12px 6px;
+      font-size: 12px;
+      color: #262626;
+      line-height: 1.4;
+      max-height: 48px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    #igHoverCard .igHC-bio:empty { display: none; }
+
+    /* Photos grid — only 3 photos in one row */
+    #igHoverCard .igHC-photos {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      padding: 0 0 1px;
+    }
+    #igHoverCard .igHC-photo {
+      aspect-ratio: 1;
+      object-fit: cover;
+      width: 100%;
+      display: block;
+    }
+    #igHoverCard .igHC-photo-placeholder {
+      aspect-ratio: 1;
+      background: #f0f0f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ccc;
+      font-size: 16px;
+    }
+    #igHoverCard .igHC-private-notice {
+      padding: 10px 12px;
+      text-align: center;
+      color: #8e8e8e;
+      font-size: 12px;
+    }
+    #igHoverCard .igHC-private-notice svg {
+      display: block;
+      margin: 0 auto 5px;
+    }
+
+    /* Footer */
+    #igHoverCard .igHC-footer {
+      padding: 8px 12px 11px;
+      display: flex;
+      gap: 6px;
+    }
+    #igHoverCard .igHC-btn {
+      flex: 1;
+      padding: 6px 0;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+    }
+    #igHoverCard .igHC-btn-primary {
+      background: #0095f6;
+      color: #fff;
+    }
+    #igHoverCard .igHC-btn-primary:hover { background: #0081d6; }
+    #igHoverCard .igHC-btn-secondary {
+      background: #efefef;
+      color: #262626;
+    }
+    #igHoverCard .igHC-btn-secondary:hover { background: #dbdbdb; }
+
+    /* Loading spinner */
+    #igHoverCard .igHC-loading {
+      padding: 32px 16px;
+      text-align: center;
+      color: #8e8e8e;
+    }
+    #igHoverCard .igHC-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #efefef;
+      border-top-color: #0095f6;
+      border-radius: 50%;
+      animation: igHC-spin 0.7s linear infinite;
+      margin: 0 auto 8px;
+    }
+    @keyframes igHC-spin { to { transform: rotate(360deg); } }
+
+    /* Error */
+    #igHoverCard .igHC-error {
+      padding: 24px 16px;
+      text-align: center;
+      color: #ed4956;
+      font-size: 13px;
+    }
+  `;
+
+  /* ─────────────────────────────────────────────
+     CARD ELEMENT
+  ───────────────────────────────────────────── */
+  const styleEl = document.createElement('style');
+  styleEl.textContent = STYLE;
+  document.head.appendChild(styleEl);
+
+  const card = document.createElement('div');
+  card.id = 'igHoverCard';
+  document.body.appendChild(card);
+
+  /* ─────────────────────────────────────────────
+     STATE
+  ───────────────────────────────────────────── */
+  let hideTimer = null;
+  let showTimer = null;
+  let currentUsername = null;
+  const cache = {};   // username → profile data
+
+  /* ─────────────────────────────────────────────
+     HELPERS
+  ───────────────────────────────────────────── */
+  function fmt(n) {
+    if (n === undefined || n === null) return '—';
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 10_000)    return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return n.toLocaleString();
+  }
+
+  function positionCard(anchorEl) {
+    const rect = anchorEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cw = 255;
+    const gap = 8;
+
+    let left = rect.left;
+    let top  = rect.bottom + gap;
+
+    if (left + cw > vw - 10) left = vw - cw - 10;
+    if (left < 10)           left = 10;
+
+    card.style.left = left + 'px';
+    card.style.top  = top  + 'px';
+    card.style.bottom = 'auto';
+
+    // Flip upward if too close to bottom
+    requestAnimationFrame(() => {
+      const ch = card.offsetHeight;
+      if (top + ch > vh - 10) {
+        card.style.top = (rect.top - ch - gap) + 'px';
+      }
+    });
+  }
+
+  function showLoading() {
+    card.innerHTML = `
+      <div class="igHC-loading">
+        <div class="igHC-spinner"></div>
+        Loading profile…
+      </div>`;
+  }
+
+  function showError(msg) {
+    card.innerHTML = `<div class="igHC-error">⚠ ${msg}</div>`;
+  }
+
+  function renderCard(data) {
+    const isPrivate = data.is_private;
+    const posts     = fmt(data.media_count);
+    const followers = fmt(data.follower_count);
+    const following = fmt(data.following_count);
+    const bio       = (data.biography || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    const fullName  = data.full_name || '';
+    const username  = data.username  || '';
+    const profileUrl = `https://www.instagram.com/${username}/`;
+
+    const avatarHTML = data.profile_pic_url
+      ? `<img class="igHC-avatar" src="${data.profile_pic_url}" alt="${username}" crossorigin="anonymous">`
+      : `<div class="igHC-avatar-placeholder"></div>`;
+
+    const badgeHTML = isPrivate
+      ? `<span class="igHC-badge private">🔒 Private</span>`
+      : `<span class="igHC-badge public">🌐 Public</span>`;
+
+    // Photos section
+    let photosHTML = '';
+    if (isPrivate) {
+      photosHTML = `
+        <div class="igHC-private-notice">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          This account is private
+        </div>`;
+    } else if (data.posts && data.posts.length > 0) {
+      const items = data.posts.slice(0, 3).map(p => {
+        const thumb = p.thumbnail_url || p.display_url || '';
+        return thumb
+          ? `<img class="igHC-photo" src="${thumb}" alt="post" crossorigin="anonymous" loading="lazy">`
+          : `<div class="igHC-photo-placeholder">📷</div>`;
+      }).join('');
+      photosHTML = `<div class="igHC-photos">${items}</div>`;
+    } else {
+      photosHTML = `<div class="igHC-private-notice" style="color:#ccc">No posts yet</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="igHC-header">
+        ${avatarHTML}
+        <div class="igHC-names">
+          <div class="igHC-fullname">${fullName || username}</div>
+          <div class="igHC-username">@${username}</div>
+          ${badgeHTML}
+        </div>
+      </div>
+      <div class="igHC-stats">
+        <div class="igHC-stat">
+          <div class="igHC-stat-val">${posts}</div>
+          <div class="igHC-stat-lbl">Posts</div>
+        </div>
+        <div class="igHC-stat">
+          <div class="igHC-stat-val">${followers}</div>
+          <div class="igHC-stat-lbl">Followers</div>
+        </div>
+        <div class="igHC-stat">
+          <div class="igHC-stat-val">${following}</div>
+          <div class="igHC-stat-lbl">Following</div>
+        </div>
+      </div>
+      ${bio ? `<div class="igHC-bio">${bio}</div>` : ''}
+      ${photosHTML}
+      <div class="igHC-footer">
+        <a class="igHC-btn igHC-btn-primary" href="${profileUrl}" target="_blank">View Profile</a>
+      </div>
+    `;
+  }
+
+  /* ─────────────────────────────────────────────
+     API FETCH  (uses Instagram's internal API)
+  ───────────────────────────────────────────── */
+
+  // Generic GM_xmlhttpRequest wrapped as a Promise
+  function gmGet(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        headers: {
+          'Accept': '*/*',
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest',
+          ...headers,
+        },
+        withCredentials: true,
+        timeout: 8000,
+        onload(res)  { resolve(res); },
+        onerror()    { reject(new Error('Network error')); },
+        ontimeout()  { reject(new Error('Request timed out')); },
+      });
+    });
+  }
+
+  // Fetch up to 6 post thumbnails via the user-media feed endpoint (needs user ID)
+  function fetchMediaFallback(userId) {
+    return gmGet(
+      `https://www.instagram.com/api/v1/feed/user/${userId}/?count=6`
+    ).then(res => {
+      const json = JSON.parse(res.responseText);
+      const items = json?.items || [];
+      return items.slice(0, 6).map(item => ({
+        thumbnail_url: item.image_versions2?.candidates?.[0]?.url
+                    || item.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url
+                    || '',
+      }));
+    }).catch(() => []); // silently fall back to empty
+  }
+
+  function fetchProfile(username) {
+    return new Promise((resolve, reject) => {
+      gmGet(
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
+      ).then(res => {
+        let json, user;
+        try {
+          json = JSON.parse(res.responseText);
+          user = json?.data?.user;
+        } catch {
+          return reject(new Error('Failed to parse profile data'));
+        }
+        if (!user) return reject(new Error('User not found'));
+
+        const profile = {
+          id:             user.id,
+          username:       user.username,
+          full_name:      user.full_name,
+          biography:      user.biography,
+          is_private:     user.is_private,
+          follower_count: user.edge_followed_by?.count,
+          following_count:user.edge_follow?.count,
+          media_count:    user.edge_owner_to_timeline_media?.count,
+          profile_pic_url:user.profile_pic_url_hd || user.profile_pic_url,
+          posts: [],
+        };
+
+        // Try to get posts from the GraphQL edge first
+        const edges = user.edge_owner_to_timeline_media?.edges || [];
+        if (edges.length > 0) {
+          profile.posts = edges.slice(0, 6).map(e => ({
+            thumbnail_url: e.node?.thumbnail_src || e.node?.display_url || '',
+          }));
+          return resolve(profile);
+        }
+
+        // Fallback: if posts count > 0 but edges are empty, hit the media feed
+        if (!profile.is_private && profile.media_count > 0 && profile.id) {
+          fetchMediaFallback(profile.id).then(posts => {
+            profile.posts = posts;
+            resolve(profile);
+          });
+        } else {
+          resolve(profile);
+        }
+      }).catch(reject);
+    });
+  }
+
+  /* ─────────────────────────────────────────────
+     SHOW / HIDE LOGIC
+  ───────────────────────────────────────────── */
+  function showCard(username, anchorEl) {
+    if (currentUsername === username && card.classList.contains('visible')) return;
+    currentUsername = username;
+
+    positionCard(anchorEl);
+    showLoading();
+    card.classList.add('visible');
+
+    if (cache[username]) {
+      renderCard(cache[username]);
+      positionCard(anchorEl);
+      return;
+    }
+
+    fetchProfile(username)
+      .then(data => {
+        if (currentUsername !== username) return; // stale
+        cache[username] = data;
+        renderCard(data);
+        positionCard(anchorEl);
+      })
+      .catch(err => {
+        if (currentUsername !== username) return;
+        showError(err.message || 'Could not load profile');
+      });
+  }
+
+  function hideCard() {
+    card.classList.remove('visible');
+    currentUsername = null;
+  }
+
+  /* ─────────────────────────────────────────────
+     USERNAME EXTRACTION from an element
+  ───────────────────────────────────────────── */
+  function extractUsername(el) {
+    // Walk up a few levels to find an <a> with an IG username href
+    let node = el;
+    for (let i = 0; i < 6; i++) {
+      if (!node) break;
+      if (node.tagName === 'A') {
+        const href = node.getAttribute('href') || '';
+        const m = href.match(/^\/([A-Za-z0-9._]{1,30})\/?(\?.*)?$/);
+        if (m && !['explore','reels','direct','stories','accounts','p','tv'].includes(m[1])) {
+          return m[1];
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /* ─────────────────────────────────────────────
+     EVENT DELEGATION  (mouseover / mouseleave)
+  ───────────────────────────────────────────── */
+  document.addEventListener('mouseover', e => {
+    const username = extractUsername(e.target);
+    if (!username) return;
+
+    clearTimeout(hideTimer);
+    clearTimeout(showTimer);
+
+    showTimer = setTimeout(() => {
+      showCard(username, e.target.closest('a') || e.target);
+    }, 400);  // 400 ms hover delay
+  }, true);
+
+  document.addEventListener('mouseout', e => {
+    // Don't hide if pointer moves into the card itself
+    const to = e.relatedTarget;
+    if (to && card.contains(to)) return;
+
+    clearTimeout(showTimer);
+    hideTimer = setTimeout(hideCard, 300);
+  }, true);
+
+  // Keep card alive when mouse is over it
+  card.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  card.addEventListener('mouseleave', () => {
+    hideTimer = setTimeout(hideCard, 200);
+  });
+
+})();
